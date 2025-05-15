@@ -53,11 +53,11 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 logger.info(f"Using device: {device}")
 
 # TODO - make the user provide their own api key
-OPENROUTER_API_KEY = (
-    "Bearer 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"
-)
+# OPENROUTER_API_KEY = (
+#     "Bearer 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"
+# )
 # TODO - make the model changeable
-DEFAULT_OPENROUTER_MODEL = "qwen/qwen3-30b-a3b:free"
+# DEFAULT_OPENROUTER_MODEL = "qwen/qwen3-30b-a3b:free"
 
 # TODO - allow user to set their own input video dir
 video_directory = "./videos"
@@ -89,10 +89,17 @@ image_paths, image_embeddings = [], None
 app = FastAPI()
 
 
-# Query class to feed into /query_similar_images
+# Query classes
 class QueryRequest(BaseModel):
     query: str
     k: int = 3
+
+
+class OpenrouterRequest(BaseModel):
+    openrouter_api_key: str = (
+        "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"
+    )
+    openrouter_model: str = "qwen/qwen3-30b-a3b:free"
 
 
 # Helper function for SSE-enhanced /extract_frames_and_embeddings endpoint
@@ -165,11 +172,14 @@ def query_similar_images(req: QueryRequest):
     }
 
 
-@app.get("/generate_pdf_report")
-def generate_pdf_report():
+@app.post("/generate_pdf_report")
+def generate_pdf_report(req: OpenrouterRequest):
     global image_paths, image_embeddings
     if not image_paths or image_embeddings is None:
         return JSONResponse(content={"error": "Images not loaded yet"}, status_code=400)
+
+    api_key = f"Bearer {req.openrouter_api_key}"
+    model = req.openrouter_model
 
     # Cluster image embeddings to get separate 'scenes'
     logger.info("Running clustering...")
@@ -200,9 +210,7 @@ def generate_pdf_report():
 
     # Query LLM for a scenario based on the scenes' captions
     logger.info("Requesting LLM scenarios...")
-    llm_response = request_scenarios(
-        centroid_captions, api_key=OPENROUTER_API_KEY, model=DEFAULT_OPENROUTER_MODEL
-    )
+    llm_response = request_scenarios(centroid_captions, api_key=api_key, model=model)
     raw_content = llm_response.json()["choices"][0]["message"]["content"]
     llm_data = decode_response(raw_content)
 
