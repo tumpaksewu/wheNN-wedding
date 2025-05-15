@@ -3,6 +3,7 @@
 
 # Ignore working directories
 /videos/frames/
+/db
 /temp
 /uploads
 /__pycache__
