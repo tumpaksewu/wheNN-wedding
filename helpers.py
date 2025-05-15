@@ -7,6 +7,7 @@ from collections import defaultdict
 from PIL import Image
 from pathlib import Path
 from tqdm import tqdm
+from typing import Generator
 
 import torch
 from torchvision import transforms
@@ -95,11 +96,15 @@ def retrieve_top_k(
 
 # FFMPEG FUNCTIONS ———————————————————————
 # TODO - downscale the video before grabbing frames
-def extract_frames(video_path, output_dir, fps=1 / 3):
+def extract_frames(
+    video_path: str, output_dir: str, fps: float = 1 / 3
+) -> Generator[str, None, None]:
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-    video_name = os.path.basename(video_path).split(".")[0]
+
+    video_name = os.path.basename(video_path)
     output_template = os.path.join(output_dir, f"{video_name}+%d.jpg")
+
     command = [
         "ffmpeg",
         "-i",
@@ -108,7 +113,19 @@ def extract_frames(video_path, output_dir, fps=1 / 3):
         f"scale=480:-2,fps={fps}",
         output_template,
     ]
-    subprocess.run(command)
+
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        universal_newlines=True,
+        bufsize=1,
+    )
+
+    for line in process.stdout:
+        yield f"[ffmpeg] {line.strip()}"
+
+    process.wait()
 
 
 # TRANSLATION FUNCTIONS ———————————————————————

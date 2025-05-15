@@ -62,8 +62,7 @@ DEFAULT_OPENROUTER_MODEL = "qwen/qwen3-30b-a3b:free"
 # TODO - allow user to set their own input video dir
 video_directory = "./videos"
 output_directory = f"{video_directory}/frames"
-# TODO - name report with timestamp / used LLM model etc
-output_pdf = "./reports/report.pdf"
+report_dir = "./reports"
 
 clip_model = CLIPModel.from_pretrained("laion/CLIP-ViT-B-32-laion2B-s34B-b79K").to(
     device
@@ -98,7 +97,6 @@ class QueryRequest(BaseModel):
 
 # Helper function for SSE-enhanced /extract_frames_and_embeddings endpoint
 # TODO - extend with support for hnsw index
-# TODO - update with ffmpeg output -> SSE stream
 def event_stream() -> Generator[str, None, None]:
     global image_paths, image_embeddings
 
@@ -111,7 +109,8 @@ def event_stream() -> Generator[str, None, None]:
             logger.info(msg)
             yield f"data: {msg}\n\n"
 
-            extract_frames(video_path, output_directory)
+            for line in extract_frames(video_path, output_directory):
+                yield f"data: {line}\n\n"
         else:
             warn = f"Skipping non-video file: {video_file}"
             logger.warning(warn)
@@ -133,6 +132,7 @@ def event_stream() -> Generator[str, None, None]:
 @app.get("/extract_frames_and_embeddings")
 def extract_frames_and_compute_embeddings():
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
 
 # TODO - update "no embeddings" warning after integrating vector db
 @app.post("/query_similar_images")
@@ -207,7 +207,12 @@ def generate_pdf_report():
     llm_data = decode_response(raw_content)
 
     # Prepare PDF and save it
+    if not os.path.exists(report_dir):
+        logger.info(f"Reports directory not found, creating {report_dir}.")
+        os.makedirs(report_dir)
     logger.info("Creating PDF...")
+    # TODO - name report with timestamp / used LLM model etc
+    output_pdf = report_dir + "/report.pdf"
     ready_pdf = prepare_pdf(llm_data, output_pdf)
     ready_pdf.save()
     logger.info(f"PDF created at {output_pdf}")
