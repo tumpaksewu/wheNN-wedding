@@ -1,0 +1,11 @@
+# Ignore all .mp4 files anywhere in the repo
+*.mp4
+
+# Ignore working directories
+/videos/frames/
+/temp
+/uploads
+/__pycache__
+
+# Ignore logs and system files
+app.log
