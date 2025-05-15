@@ -228,7 +228,7 @@ def ru_to_en(text: str, device, tr_model, tokenizer) -> str:
     translated_text = tokenizer.decode(translated_tokens[0], skip_special_tokens=True)
     return translated_text
 
-
+# TODO - change to KMeans (no of clusters derived from frame count)?
 # CLUSTERING FUNCTIONS ———————————————————————
 def cluster_embeddings(
     embeddings, n_components=64, min_cluster_size_ratio=0.015, min_samples=1

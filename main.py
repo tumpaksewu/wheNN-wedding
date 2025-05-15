@@ -4,10 +4,12 @@ import shutil
 import logging
 import pickle
 import numpy as np
-from fastapi import FastAPI, UploadFile, Form
+from fastapi import FastAPI, UploadFile, Form, HTTPException
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import List, Generator
+from pathlib import Path
 from tqdm import tqdm
 from transformers import (
     CLIPProcessor,
@@ -93,6 +95,10 @@ app = FastAPI()
 
 
 # Query classes
+class FolderRequest(BaseModel):
+    path: str
+
+
 class AnalysisRequest(BaseModel):
     path_to_videos: str = "./videos"
 
@@ -152,6 +158,47 @@ def extract_frames_and_compute_embeddings(req: AnalysisRequest):
     global video_directory
     video_directory = req.path_to_videos
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+# TODO - move somewhere
+mounted = {"videos": False, "frames": False}
+VIDEO_EXTS = {".mp4", ".avi", ".mov", ".MP4", ".AVI", ".MOV"}
+
+
+@app.post("/mount_and_list")
+def mount_and_list_videos(data: FolderRequest):
+    folder_path = Path(data.path).resolve()
+    frames_path = folder_path / "frames"
+
+    if not folder_path.is_dir():
+        raise HTTPException(
+            status_code=400, detail="Provided path is not a valid directory"
+        )
+
+    # Mount main video path
+    if not mounted["videos"]:
+        app.mount("/videos", StaticFiles(directory=str(folder_path)), name="videos")
+        mounted["videos"] = True
+
+    # Mount frames subfolder if it exists
+    if frames_path.is_dir() and not mounted["frames"]:
+        app.mount("/frames", StaticFiles(directory=str(frames_path)), name="frames")
+        mounted["frames"] = True
+
+    # Collect video file full paths
+    video_files = [
+        str(f.resolve())
+        for f in folder_path.iterdir()
+        if f.is_file() and f.suffix in VIDEO_EXTS
+    ]
+
+    return JSONResponse(
+        {
+            "mounted_video_dir": str(folder_path),
+            "mounted_frames_dir": str(frames_path) if frames_path.is_dir() else None,
+            "video_files": video_files,
+        }
+    )
 
 
 # TODO - update "no embeddings" warning after integrating vector db

@@ -3,6 +3,7 @@
 
 # Ignore working directories
 /videos/frames/
+/app
 /db
 /temp
 /uploads
