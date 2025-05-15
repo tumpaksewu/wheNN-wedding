@@ -170,7 +170,6 @@ def retrieve_top_k(query, hnsw_index, metadata, device, clip_model, processor, k
 
 
 # FFMPEG FUNCTIONS ———————————————————————
-# TODO - downscale the video before grabbing frames
 def extract_frames(
     video_path: str, output_dir: str, fps: float = 1 / 3
 ) -> Generator[str, None, None]:
@@ -235,10 +234,9 @@ def cluster_embeddings(
     embeddings, n_components=64, min_cluster_size_ratio=0.015, min_samples=1
 ):
     # Step 1: Convert & reduce
-    embeddings_np = embeddings.numpy()
-    embeddings_np = normalize(embeddings_np)
+    embeddings = normalize(embeddings)
     pca = PCA(n_components=n_components)
-    reduced = pca.fit_transform(embeddings_np)
+    reduced = pca.fit_transform(embeddings)
 
     # Step 2: Use dynamic min_cluster_size based on % of video length
     min_cluster_size = max(
@@ -264,20 +262,15 @@ def group_by_cluster(image_paths, cluster_labels, include_noise=True):
 
 
 # Get centroid images for each cluster
-def get_centroid_images(clusters, image_embeddings, image_paths):
-    centroid_images = {}
-    embeddings_np = image_embeddings.numpy()
-
-    for cluster_id, img_paths in clusters.items():
-        indices = [image_paths.index(p) for p in img_paths]
-        cluster_embeddings = embeddings_np[indices]
-
-        centroid = cluster_embeddings.mean(axis=0)
-        dists = np.linalg.norm(cluster_embeddings - centroid, axis=1)
-        closest_idx = np.argmin(dists)
-
-        centroid_images[cluster_id] = img_paths[closest_idx]
-    return centroid_images
+def get_centroid_images(clusters, embeddings):
+    centroids = {}
+    for cluster_id, indices in clusters.items():
+        cluster_embeds = embeddings[indices]
+        centroid = np.mean(cluster_embeds, axis=0)
+        distances = np.linalg.norm(cluster_embeds - centroid, axis=1)
+        min_idx = indices[np.argmin(distances)]
+        centroids[cluster_id] = min_idx
+    return centroids
 
 
 # Run BLIP2 on centroid images to get captions
@@ -293,7 +286,12 @@ def describe_image(image_path, device, blip_model, blip_processor):
 # LLM FUNCTIONS ———————————————————————
 def request_scenarios(centroid_captions, api_key, model, prompt=None):
     scenes = [
-        {"image_path": item["image_path"], "description": item["caption"].strip("\n")}
+        {
+            "description": item["caption"].strip("\n"),
+            "image_path": item["image_path"],
+            "video_filename": item["video_filename"],
+            "timestamp": item["timestamp"],
+        }
         for item in centroid_captions
     ]
 
@@ -306,22 +304,25 @@ def request_scenarios(centroid_captions, api_key, model, prompt=None):
 
         Сделай следующее:
 
-        1. 🔢 Расставь сцены в том порядке, который создаёт плавную и эмоционально выразительную историю.
-        2. 💡 Для каждой сцены напиши краткое обоснование: почему она должна идти именно здесь?
-        3. После каждой сцены укажи ее image_path без дополнительных символов.
-        4. 🎬 В конце объясни общую логику выбранного сценария и его эмоциональной дуги.
+        1. Расставь сцены в том порядке, который создаёт плавную и эмоционально выразительную историю.
+        2. Для каждой сцены напиши краткое обоснование: почему она должна идти именно здесь.
+        3. В конце объясни общую логику выбранного сценария и его эмоциональной дуги.
+        4. Также, не забудь отправить обратно информацию о изображении и видеофайле (image_path, video_filename, timestamp). Придерживайся структуры ниже.
 
-        Структурируй ответ в формате JSON в следующей структуре:
+        Отправь ответ четко в формате валидного JSON в следующей структуре:
         {{
         "scenes": [
             {{
-            "image_path": "путь_к_изображению",
             "description": "описание сцены",
-            "justification": "обоснование"
+            "justification": "обоснование",
+            "image_path": "путь_к_изображению",
+            "video_filename": "название_видеофайла",
+            "timestamp": "временной_код",
             }},
         ],
-        "overall_logic": "логика сценария"
+        "overall_logic": "Общая логика сценария"
         }}
+        Кроме этого JSON в твоем ответе не должно быть ничего.
         Формируй ответ понятно, без использования служебных слов типа "currentIndex", "kola!" и других технических терминов.
         """
 
@@ -384,12 +385,11 @@ def prepare_pdf(parsed_data, output_pdf="wedding_scenario_reportlab.pdf"):
 
     # === Draw scenes ===
     for i, scene in enumerate(parsed_data["scenes"], 1):
-        image_path = scene["image_path"]
         description = scene["description"]
         justification = scene["justification"]
-        video_filename, pseudo_timestamp = os.path.splitext(
-            os.path.basename(image_path)
-        )[0].split("+")
+        image_path = scene["image_path"]
+        video_filename = scene["video_filename"]
+        timestamp = scene["timestamp"]
 
         c.setFont("DejaVu", 14)
         y = draw_wrapped_text(
@@ -404,6 +404,15 @@ def prepare_pdf(parsed_data, output_pdf="wedding_scenario_reportlab.pdf"):
         y = draw_wrapped_text(
             c,
             f"Обоснование: {justification}",
+            margin,
+            y - 5,
+            max_width=max_width,
+            font_size=11,
+            leading=13,
+        )
+        y = draw_wrapped_text(
+            c,
+            f"Данные файла: {image_path}, {video_filename}, {timestamp}",
             margin,
             y - 5,
             max_width=max_width,

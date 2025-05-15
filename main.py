@@ -2,6 +2,8 @@ import torch
 import os
 import shutil
 import logging
+import pickle
+import numpy as np
 from fastapi import FastAPI, UploadFile, Form
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
@@ -34,6 +36,7 @@ from helpers import (
 )
 
 # TODO - make the app clean up the frames folder (maybe something else?) when exiting
+# TODO - load hnsw index and metadata at startup safely, otherwise set to None
 
 # Logging ——————————————————————————————————————————————
 log_file = "app.log"
@@ -54,11 +57,9 @@ if shutil.which("ffmpeg") is None:
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 logger.info(f"Using device: {device}")
 
-# TODO - make the user provide their own api key
 # OPENROUTER_API_KEY = (
 #     "Bearer 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"
 # )
-# TODO - make the model changeable
 # DEFAULT_OPENROUTER_MODEL = "qwen/qwen3-30b-a3b:free"
 
 # TODO - allow user to set their own input video dir
@@ -109,7 +110,6 @@ class OpenrouterRequest(BaseModel):
 
 
 # Helper function for SSE-enhanced /extract_frames_and_embeddings endpoint
-# TODO - extend with support for hnsw index
 def event_stream() -> Generator[str, None, None]:
     global image_paths, image_embeddings
 
@@ -144,10 +144,6 @@ def event_stream() -> Generator[str, None, None]:
     msg = f"Built hnsw index and metadata file with {len(m)} entries!"
     logger.info(msg)
     yield f"data: {msg}\n\n"
-
-    # TODO - remove this later
-    # logger.info(f"{image_paths[3]}, {video_filenames[3]} {timestamps[3]}")
-
     yield "data: DONE\n\n"
 
 
@@ -171,7 +167,6 @@ def query_similar_images(req: QueryRequest):
     ).lower()
     logger.info(f"Received query: {req.query} → {translated_query}")
 
-    # TODO - add timestamps to results
     # Get top images' filenames and scores
     top_paths, top_scores, video_filenames, timestamps = retrieve_top_k(
         translated_query,
@@ -197,26 +192,45 @@ def query_similar_images(req: QueryRequest):
 
 @app.post("/generate_pdf_report")
 def generate_pdf_report(req: OpenrouterRequest):
-    global image_paths, image_embeddings
-    if not image_paths or image_embeddings is None:
+    hnsw_index, metadata = load_hnsw_index()
+    if hnsw_index is None or metadata is None:
         return JSONResponse(content={"error": "Images not loaded yet"}, status_code=400)
+
+    # Load image embeddings from the hnsw index
+    try:
+        num_elements = len(metadata)
+        dim = hnsw_index.dim  # assuming hnswlib index was loaded earlier
+        image_embeddings = np.zeros((num_elements, dim), dtype=np.float32)
+        for i in range(num_elements):
+            image_embeddings[i] = hnsw_index.get_items([i])[0]
+    except Exception as e:
+        return JSONResponse(
+            content={"error": f"Failed to load embeddings: {str(e)}"}, status_code=500
+        )
 
     api_key = f"Bearer {req.openrouter_api_key}"
     model = req.openrouter_model
 
-    # Cluster image embeddings to get separate 'scenes'
+    # Step 1: Cluster the embeddings
     logger.info("Running clustering...")
     cluster_labels = cluster_embeddings(image_embeddings)
-    clusters = group_by_cluster(image_paths, cluster_labels, include_noise=True)
 
-    # Get scenes' centroids
+    # Step 2: Group metadata by cluster ID
+    clusters = {}
+    for idx, label in enumerate(cluster_labels):
+        if label not in clusters:
+            clusters[label] = []
+        clusters[label].append(idx)  # Save index instead of path
+
+    # Step 3: Get centroid image per cluster
     logger.info("Getting centroid images...")
-    centroid_images = get_centroid_images(clusters, image_embeddings, image_paths)
+    centroid_images = get_centroid_images(clusters, image_embeddings)
 
-    # Run BLIP2 on scenes' centroids to get their captions
+    # Step 4: Generate captions using BLIP2
     logger.info("Generating captions...")
     centroid_captions = []
-    for cluster_id, img_path in tqdm(centroid_images.items()):
+    for cluster_id, img_idx in tqdm(centroid_images.items()):
+        img_path, video_filename, timestamp = metadata[img_idx]
         caption = describe_image(
             img_path,
             device=device,
@@ -226,29 +240,30 @@ def generate_pdf_report(req: OpenrouterRequest):
         centroid_captions.append(
             {
                 "cluster_id": cluster_id,
-                "image_path": str(img_path),
+                "image_path": img_path,
+                "video_filename": video_filename,
+                "timestamp": timestamp,
                 "caption": caption,
             }
         )
 
-    # Query LLM for a scenario based on the scenes' captions
+    # Step 5: Query LLM with structured input
     logger.info("Requesting LLM scenarios...")
     llm_response = request_scenarios(centroid_captions, api_key=api_key, model=model)
     raw_content = llm_response.json()["choices"][0]["message"]["content"]
     llm_data = decode_response(raw_content)
 
-    # Prepare PDF and save it
+    # Step 6: Create PDF
+    # TODO - name report with used model + timestamp?
     if not os.path.exists(report_dir):
         logger.info(f"Reports directory not found, creating {report_dir}.")
         os.makedirs(report_dir)
-    logger.info("Creating PDF...")
-    # TODO - name report with timestamp / used LLM model etc
     output_pdf = report_dir + "/report.pdf"
     ready_pdf = prepare_pdf(llm_data, output_pdf)
     ready_pdf.save()
     logger.info(f"PDF created at {output_pdf}")
 
-    # Send PDF to user
+    # Step 7: Return PDF to user
     return FileResponse(
         output_pdf, media_type="application/pdf", filename="scenario_report.pdf"
     )
