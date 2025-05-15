@@ -29,6 +29,8 @@ from helpers import (
     request_scenarios,
     decode_response,
     prepare_pdf,
+    build_hnsw_index,
+    load_hnsw_index,
 )
 
 # TODO - make the app clean up the frames folder (maybe something else?) when exiting
@@ -90,6 +92,10 @@ app = FastAPI()
 
 
 # Query classes
+class AnalysisRequest(BaseModel):
+    path_to_videos: str = "./videos"
+
+
 class QueryRequest(BaseModel):
     query: str
     k: int = 3
@@ -125,26 +131,38 @@ def event_stream() -> Generator[str, None, None]:
 
     yield "data: Extracting image embeddings...\n\n"
 
-    image_paths, image_embeddings = get_image_embeddings(
-        output_directory, device=device, clip_model=clip_model
-    )
+    (
+        image_paths,
+        image_embeddings,
+    ) = get_image_embeddings(output_directory, device=device, clip_model=clip_model)
 
     msg = f"Processed {len(image_paths)} images."
     logger.info(msg)
     yield f"data: {msg}\n\n"
 
+    _, m = build_hnsw_index(image_embeddings, image_paths)
+    msg = f"Built hnsw index and metadata file with {len(m)} entries!"
+    logger.info(msg)
+    yield f"data: {msg}\n\n"
+
+    # TODO - remove this later
+    # logger.info(f"{image_paths[3]}, {video_filenames[3]} {timestamps[3]}")
+
     yield "data: DONE\n\n"
 
 
-@app.get("/extract_frames_and_embeddings")
-def extract_frames_and_compute_embeddings():
+@app.post("/extract_frames_and_embeddings")
+def extract_frames_and_compute_embeddings(req: AnalysisRequest):
+    global video_directory
+    video_directory = req.path_to_videos
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 # TODO - update "no embeddings" warning after integrating vector db
 @app.post("/query_similar_images")
 def query_similar_images(req: QueryRequest):
-    if not image_paths or image_embeddings is None:
+    hnsw_index, metadata = load_hnsw_index()
+    if hnsw_index is None or metadata is None:
         return JSONResponse(content={"error": "Images not loaded yet"}, status_code=400)
 
     # Translate query to English with translation model
@@ -155,10 +173,10 @@ def query_similar_images(req: QueryRequest):
 
     # TODO - add timestamps to results
     # Get top images' filenames and scores
-    top_paths, scores = retrieve_top_k(
+    top_paths, top_scores, video_filenames, timestamps = retrieve_top_k(
         translated_query,
-        image_paths,
-        image_embeddings,
+        hnsw_index,
+        metadata,
         device=device,
         clip_model=clip_model,
         processor=processor,
@@ -166,8 +184,13 @@ def query_similar_images(req: QueryRequest):
     )
     return {
         "results": [
-            {"filename": os.path.basename(p), "score": float(s)}
-            for p, s in zip(top_paths, scores)
+            {
+                "image_path": str(p),
+                "score": float(s),
+                "video_filename": str(fn),
+                "timestamp": str(ts),
+            }
+            for p, s, fn, ts in zip(top_paths, top_scores, video_filenames, timestamps)
         ]
     }
 

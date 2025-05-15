@@ -3,6 +3,7 @@ import subprocess
 import requests
 import json
 import numpy as np
+import pickle
 from collections import defaultdict
 from PIL import Image
 from pathlib import Path
@@ -13,6 +14,7 @@ import torch
 from torchvision import transforms
 
 import hdbscan
+import hnswlib
 from sklearn.preprocessing import normalize
 from sklearn.decomposition import PCA
 
@@ -84,14 +86,87 @@ def get_text_embedding(text, device, clip_model, processor):
     return embedding.cpu()
 
 
-# Find top-3 most similar images
-def retrieve_top_k(
-    query, image_paths, image_embeddings, device, clip_model, processor, k=3
+# VECTOR-DB FUNCTIONS ———————————————————————
+# Build hnswlib index + store metadata
+# TODO - clean up path logic
+def build_hnsw_index(
+    embeddings_tensor,
+    image_paths,
+    index_path="./db/hnsw_index.bin",
+    metadata_path="./db/hnsw_metadata.pkl",
 ):
+    if not os.path.exists("./db"):
+        os.makedirs("./db")
+
+    # Convert to numpy array
+    embeddings = embeddings_tensor.numpy().astype(np.float32)
+    dim = embeddings.shape[1]
+    num_elements = embeddings.shape[0]
+
+    # Initialize Hnswlib index
+    p = hnswlib.Index(space="cosine", dim=dim)
+    p.init_index(max_elements=num_elements, ef_construction=200, M=16)
+
+    # Add embeddings
+    p.add_items(embeddings, ids=list(range(num_elements)))
+
+    # Set ef for runtime search
+    p.set_ef(50)
+
+    # Save index
+    p.save_index(index_path)
+
+    # Format metadata
+    video_filenames = []
+    timestamps = []
+    for posix_path in image_paths:
+        filename = posix_path.name
+        video_name, frame_number_str = filename.split("+")
+        video_name = os.path.basename(video_name)
+        frame_number = int(os.path.splitext(frame_number_str)[0])
+        timestamp = frame_number * 3  # 3 sec/frame assumption
+        video_filenames.append(video_name)
+        timestamps.append(timestamp)
+
+    # Save metadata
+    metadata = {
+        i: [str(image_paths[i]), video_filenames[i], timestamps[i]]
+        for i in range(len(image_paths))
+    }
+    with open(metadata_path, "wb") as f:
+        pickle.dump(metadata, f)
+
+    print(f"Index and metadata saved: {index_path}, {metadata_path}")
+    return p, metadata
+
+
+# Load hnswlib index + metadata
+def load_hnsw_index(
+    index_path="./db/hnsw_index.bin", metadata_path="./db/hnsw_metadata.pkl", dim=512
+):
+    if not os.path.isfile(index_path):
+        return None, None
+    p = hnswlib.Index(space="cosine", dim=dim)
+    p.load_index(index_path)
+
+    with open(metadata_path, "rb") as f:
+        metadata = pickle.load(f)
+
+    return p, metadata
+
+
+# Retrieve top-K using prebuilt hnswlib index + metadata file
+def retrieve_top_k(query, hnsw_index, metadata, device, clip_model, processor, k=3):
     text_emb = get_text_embedding(query, device, clip_model, processor)
-    similarities = (image_embeddings @ text_emb.T).squeeze()
-    top_k_indices = similarities.topk(k).indices
-    return [image_paths[i] for i in top_k_indices], similarities[top_k_indices].numpy()
+    text_emb_np = text_emb.numpy().astype("float32")
+
+    labels, distances = hnsw_index.knn_query(text_emb_np, k=k)
+    top_paths = [metadata[i][0] for i in labels[0]]
+    video_filenames = [metadata[i][1] for i in labels[0]]
+    timestamps = [metadata[i][2] for i in labels[0]]
+    top_scores = [1 - d for d in distances[0]]
+
+    return top_paths, top_scores, video_filenames, timestamps
 
 
 # FFMPEG FUNCTIONS ———————————————————————
@@ -109,6 +184,8 @@ def extract_frames(
         "ffmpeg",
         "-i",
         video_path,
+        "-ss",
+        "3",
         "-vf",
         f"scale=480:-2,fps={fps}",
         output_template,
