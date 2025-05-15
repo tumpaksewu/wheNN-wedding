@@ -187,7 +187,7 @@ def mount_and_list_videos(data: FolderRequest):
 
     # Collect video file full paths
     video_files = [
-        str(f.resolve())
+        f"/videos/{f.name}"
         for f in folder_path.iterdir()
         if f.is_file() and f.suffix in VIDEO_EXTS
     ]
