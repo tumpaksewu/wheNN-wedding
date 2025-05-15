@@ -7,5 +7,13 @@
 /uploads
 /__pycache__
 
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+
 # Ignore logs and system files
 app.log
+
+# Ignore testing files
+/reports/*.pdf
