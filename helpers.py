@@ -4,6 +4,7 @@ import requests
 import json
 import numpy as np
 import pickle
+import csv
 from collections import defaultdict
 from PIL import Image
 from pathlib import Path
@@ -288,6 +289,56 @@ def describe_image(image_path, device, blip_model, blip_processor):
         output = blip_model.generate(**inputs, max_new_tokens=50)
     caption = blip_processor.tokenizer.decode(output[0], skip_special_tokens=True)
     return caption
+
+
+def build_captions_csv(centroid_images, metadata, device, blip_model, blip_processor):
+    csv_output_path = Path("./reports/scene_captions.csv")
+    with open(csv_output_path, mode="w", newline="", encoding="utf-8") as csvfile:
+        fieldnames = [
+            "cluster_id",
+            "image_path",
+            "video_filename",
+            "timestamp",
+            "caption",
+        ]
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+
+        for cluster_id, img_idx in tqdm(centroid_images.items()):
+            img_path, video_filename, timestamp, _ = metadata[img_idx]
+            caption = describe_image(
+                img_path,
+                device=device,
+                blip_model=blip_model,
+                blip_processor=blip_processor,
+            )
+            writer.writerow(
+                {
+                    "cluster_id": cluster_id,
+                    "image_path": str(img_path),
+                    "video_filename": video_filename,
+                    "timestamp": timestamp,
+                    "caption": caption,
+                }
+            )
+    return True
+
+
+def read_captions_csv(csv_input_path):
+    centroid_captions = []
+    with open(csv_input_path, mode="r", newline="", encoding="utf-8") as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            centroid_captions.append(
+                {
+                    "cluster_id": int(row["cluster_id"]),
+                    "image_path": row["image_path"],
+                    "video_filename": row["video_filename"],
+                    "timestamp": int(row["timestamp"]),
+                    "caption": row["caption"],
+                }
+            )
+    return centroid_captions
 
 
 # LLM FUNCTIONS ———————————————————————

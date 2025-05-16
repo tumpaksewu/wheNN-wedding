@@ -27,9 +27,9 @@ from helpers import (
     extract_frames,
     ru_to_en,
     cluster_embeddings,
-    group_by_cluster,
     get_centroid_images,
-    describe_image,
+    build_captions_csv,
+    read_captions_csv,
     request_scenarios,
     decode_response,
     prepare_pdf,
@@ -257,8 +257,8 @@ def query_similar_images(req: QueryRequest):
     }
 
 
-@app.post("/generate_pdf_report")
-def generate_pdf_report(req: OpenrouterRequest):
+@app.get("/generate_scene_captions")
+def generate_scene_captions():
     hnsw_index, metadata = load_hnsw_index()
     if hnsw_index is None or metadata is None:
         return JSONResponse(content={"error": "Images not loaded yet"}, status_code=400)
@@ -274,9 +274,6 @@ def generate_pdf_report(req: OpenrouterRequest):
         return JSONResponse(
             content={"error": f"Failed to load embeddings: {str(e)}"}, status_code=500
         )
-
-    api_key = f"Bearer {req.openrouter_api_key}"
-    model = req.openrouter_model
 
     # Step 1: Cluster the embeddings
     logger.info("Running clustering...")
@@ -295,32 +292,39 @@ def generate_pdf_report(req: OpenrouterRequest):
 
     # Step 4: Generate captions using BLIP2
     logger.info("Generating captions...")
-    centroid_captions = []
-    for cluster_id, img_idx in tqdm(centroid_images.items()):
-        img_path, video_filename, timestamp, _ = metadata[img_idx]
-        caption = describe_image(
-            img_path,
-            device=device,
-            blip_model=blip_model,
-            blip_processor=blip_processor,
-        )
-        centroid_captions.append(
-            {
-                "cluster_id": cluster_id,
-                "image_path": img_path,
-                "video_filename": video_filename,
-                "timestamp": timestamp,
-                "caption": caption,
-            }
+    build_csv = build_captions_csv(
+        centroid_images, metadata, device, blip_model, blip_processor
+    )
+    if build_csv:
+        logger.info(f"Captions saved to {REPORT_DIR}/scene_captions.csv.")
+    else:
+        logger.warning("Captions failed to build!")
+
+
+@app.post("/generate_pdf_report")
+def generate_pdf_report(req: OpenrouterRequest):
+    api_key = f"Bearer {req.openrouter_api_key}"
+    model = req.openrouter_model
+
+    csv_input_path = Path(f"{REPORT_DIR}/scene_captions.csv")
+    if not csv_input_path.exists():
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": f"Файл не найден: {csv_input_path}. Возможно, вы еще не запускали /generate_scene_captions?"
+            },
         )
 
-    # Step 5: Query LLM with structured input
+    # Open CSV with BLIP2 captions
+    centroid_captions = read_captions_csv(csv_input_path)
+
+    # Query LLM with structured input
     logger.info("Requesting LLM scenarios...")
     llm_response = request_scenarios(centroid_captions, api_key=api_key, model=model)
     raw_content = llm_response.json()["choices"][0]["message"]["content"]
     llm_data = decode_response(raw_content)
 
-    # Step 6: Create PDF
+    # Create PDF
     # TODO - name report with used model + timestamp?
     if not os.path.exists(REPORT_DIR):
         logger.info(f"Reports directory not found, creating {REPORT_DIR}.")
@@ -330,7 +334,7 @@ def generate_pdf_report(req: OpenrouterRequest):
     ready_pdf.save()
     logger.info(f"PDF created at {output_pdf}")
 
-    # Step 7: Return PDF to user
+    # Return PDF to user
     return FileResponse(
         output_pdf, media_type="application/pdf", filename="scenario_report.pdf"
     )
