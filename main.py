@@ -2,7 +2,7 @@ import torch
 import os
 import shutil
 import logging
-import pickle
+import json
 import numpy as np
 from fastapi import FastAPI, UploadFile, Form, HTTPException
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -323,7 +323,7 @@ def generate_pdf_report(req: OpenrouterRequest):
     llm_response = request_scenarios(centroid_captions, api_key=api_key, model=model)
     raw_content = llm_response.json()["choices"][0]["message"]["content"]
     llm_data = decode_response(raw_content)
-
+    
     # Create PDF
     # TODO - name report with used model + timestamp?
     if not os.path.exists(REPORT_DIR):
