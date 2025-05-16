@@ -119,18 +119,21 @@ def build_hnsw_index(
     # Format metadata
     video_filenames = []
     timestamps = []
+    image_names = []
     for posix_path in image_paths:
         filename = posix_path.name
-        video_name, frame_number_str = filename.split("+")
+        image_name = os.path.basename(filename)
+        video_name, frame_number_str = filename.split("~")
         video_name = os.path.basename(video_name)
         frame_number = int(os.path.splitext(frame_number_str)[0])
         timestamp = frame_number * 3  # 3 sec/frame assumption
         video_filenames.append(video_name)
         timestamps.append(timestamp)
+        image_names.append(image_name)
 
     # Save metadata
     metadata = {
-        i: [str(image_paths[i]), video_filenames[i], timestamps[i]]
+        i: [str(image_paths[i]), video_filenames[i], timestamps[i], image_names[i]]
         for i in range(len(image_paths))
     }
     with open(metadata_path, "wb") as f:
@@ -164,9 +167,10 @@ def retrieve_top_k(query, hnsw_index, metadata, device, clip_model, processor, k
     top_paths = [metadata[i][0] for i in labels[0]]
     video_filenames = [metadata[i][1] for i in labels[0]]
     timestamps = [metadata[i][2] for i in labels[0]]
+    image_names = [metadata[i][3] for i in labels[0]]
     top_scores = [1 - d for d in distances[0]]
 
-    return top_paths, top_scores, video_filenames, timestamps
+    return top_paths, top_scores, video_filenames, timestamps, image_names
 
 
 # FFMPEG FUNCTIONS ———————————————————————
@@ -177,7 +181,7 @@ def extract_frames(
         os.makedirs(output_dir)
 
     video_name = os.path.basename(video_path)
-    output_template = os.path.join(output_dir, f"{video_name}+%d.jpg")
+    output_template = os.path.join(output_dir, f"{video_name}~%d.jpg")
 
     command = [
         "ffmpeg",
@@ -228,10 +232,10 @@ def ru_to_en(text: str, device, tr_model, tokenizer) -> str:
     translated_text = tokenizer.decode(translated_tokens[0], skip_special_tokens=True)
     return translated_text
 
-# TODO - change to KMeans (no of clusters derived from frame count)?
+
 # CLUSTERING FUNCTIONS ———————————————————————
 def cluster_embeddings(
-    embeddings, n_components=64, min_cluster_size_ratio=0.015, min_samples=1
+    embeddings, n_components=32, min_cluster_size_ratio=0.005, min_samples=3
 ):
     # Step 1: Convert & reduce
     embeddings = normalize(embeddings)
@@ -245,7 +249,10 @@ def cluster_embeddings(
 
     # Step 3: Cluster with cosine metric
     clusterer = hdbscan.HDBSCAN(
-        min_cluster_size=min_cluster_size, min_samples=min_samples, metric="euclidean"
+        min_cluster_size=min_cluster_size,
+        min_samples=min_samples,
+        metric="euclidean",
+        cluster_selection_epsilon=0.05,
     )  # works on PCA-reduced vectors
     cluster_labels = clusterer.fit_predict(reduced)
 
@@ -294,7 +301,7 @@ def request_scenarios(centroid_captions, api_key, model, prompt=None):
         }
         for item in centroid_captions
     ]
-
+    # TODO - improve prompt (e.g. generate at least 10 scenes if user passed >15)
     if not prompt:
         prompt = f"""
         Ты опытный видеомонтажёр, специализирующийся на свадебных видео.  

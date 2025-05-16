@@ -65,9 +65,10 @@ logger.info(f"Using device: {device}")
 # DEFAULT_OPENROUTER_MODEL = "qwen/qwen3-30b-a3b:free"
 
 # TODO - allow user to set their own input video dir
-video_directory = "./videos"
-output_directory = f"{video_directory}/frames"
-report_dir = "./reports"
+REPORT_DIR = "./reports"
+
+SERVER_VIDEO_DIR = "http://localhost:8000/videos"
+SERVER_FRAMES_DIR = "http://localhost:8000/frames"
 
 clip_model = CLIPModel.from_pretrained("laion/CLIP-ViT-B-32-laion2B-s34B-b79K").to(
     device
@@ -115,20 +116,39 @@ class OpenrouterRequest(BaseModel):
     openrouter_model: str = "qwen/qwen3-30b-a3b:free"
 
 
+# Helper function to mount server folders
+def mount_folders(video_folder_path):
+    # Mount main video path
+    if not mounted["videos"]:
+        app.mount(
+            "/videos", StaticFiles(directory=str(video_folder_path)), name="videos"
+        )
+        mounted["videos"] = True
+
+    # Mount frames subfolder if it exists
+    frames_path = video_folder_path / "frames"
+    if not mounted["frames"]:
+        if not os.path.exists(frames_path):
+            os.makedirs(frames_path)
+        app.mount("/frames", StaticFiles(directory=str(frames_path)), name="frames")
+        mounted["frames"] = True
+    return video_folder_path, frames_path
+
+
 # Helper function for SSE-enhanced /extract_frames_and_embeddings endpoint
 def event_stream() -> Generator[str, None, None]:
     global image_paths, image_embeddings
 
     yield "data: Starting frame extraction and embedding computation...\n\n"
 
-    for video_file in os.listdir(video_directory):
+    for video_file in os.listdir(app.state.VIDEO_DIR):
         if video_file.endswith(".mp4"):
-            video_path = os.path.join(video_directory, video_file)
+            video_path = os.path.join(app.state.VIDEO_DIR, video_file)
             msg = f"Extracting frames from {video_path}"
             logger.info(msg)
             yield f"data: {msg}\n\n"
 
-            for line in extract_frames(video_path, output_directory):
+            for line in extract_frames(video_path, app.state.FRAMES_DIR):
                 yield f"data: {line}\n\n"
         else:
             warn = f"Skipping non-video file: {video_file}"
@@ -140,7 +160,7 @@ def event_stream() -> Generator[str, None, None]:
     (
         image_paths,
         image_embeddings,
-    ) = get_image_embeddings(output_directory, device=device, clip_model=clip_model)
+    ) = get_image_embeddings(app.state.FRAMES_DIR, device=device, clip_model=clip_model)
 
     msg = f"Processed {len(image_paths)} images."
     logger.info(msg)
@@ -155,41 +175,36 @@ def event_stream() -> Generator[str, None, None]:
 
 @app.post("/extract_frames_and_embeddings")
 def extract_frames_and_compute_embeddings(req: AnalysisRequest):
-    global video_directory
-    video_directory = req.path_to_videos
+    if not app.state.VIDEO_DIR:
+        raise HTTPException(
+            status_code=400, detail="Пожалуйста, сначала укажите рабочую папку с видео!"
+        )
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 # TODO - move somewhere
 mounted = {"videos": False, "frames": False}
-VIDEO_EXTS = {".mp4", ".avi", ".mov", ".MP4", ".AVI", ".MOV"}
 
 
 @app.post("/mount_and_list")
 def mount_and_list_videos(data: FolderRequest):
     folder_path = Path(data.path).resolve()
-    frames_path = folder_path / "frames"
+    folder_path, frames_path = mount_folders(folder_path)
 
     if not folder_path.is_dir():
         raise HTTPException(
             status_code=400, detail="Provided path is not a valid directory"
         )
 
-    # Mount main video path
-    if not mounted["videos"]:
-        app.mount("/videos", StaticFiles(directory=str(folder_path)), name="videos")
-        mounted["videos"] = True
-
-    # Mount frames subfolder if it exists
-    if frames_path.is_dir() and not mounted["frames"]:
-        app.mount("/frames", StaticFiles(directory=str(frames_path)), name="frames")
-        mounted["frames"] = True
+    app.state.VIDEO_DIR = folder_path
+    app.state.FRAMES_DIR = frames_path
 
     # Collect video file full paths
+    video_exts = {".mp4", ".avi", ".mov", ".MP4", ".AVI", ".MOV"}
     video_files = [
-        f"/videos/{f.name}"
+        f"{SERVER_VIDEO_DIR}{f.name}"
         for f in folder_path.iterdir()
-        if f.is_file() and f.suffix in VIDEO_EXTS
+        if f.is_file() and f.suffix in video_exts
     ]
 
     return JSONResponse(
@@ -204,6 +219,8 @@ def mount_and_list_videos(data: FolderRequest):
 # TODO - update "no embeddings" warning after integrating vector db
 @app.post("/query_similar_images")
 def query_similar_images(req: QueryRequest):
+    mount_folders(app.state.VIDEO_DIR)
+
     hnsw_index, metadata = load_hnsw_index()
     if hnsw_index is None or metadata is None:
         return JSONResponse(content={"error": "Images not loaded yet"}, status_code=400)
@@ -215,7 +232,7 @@ def query_similar_images(req: QueryRequest):
     logger.info(f"Received query: {req.query} → {translated_query}")
 
     # Get top images' filenames and scores
-    top_paths, top_scores, video_filenames, timestamps = retrieve_top_k(
+    top_paths, top_scores, video_names, timestamps, image_names = retrieve_top_k(
         translated_query,
         hnsw_index,
         metadata,
@@ -229,10 +246,13 @@ def query_similar_images(req: QueryRequest):
             {
                 "image_path": str(p),
                 "score": float(s),
-                "video_filename": str(fn),
+                "video_name": str(vn),
                 "timestamp": str(ts),
+                "image_name": str(imn),
             }
-            for p, s, fn, ts in zip(top_paths, top_scores, video_filenames, timestamps)
+            for p, s, vn, ts, imn in zip(
+                top_paths, top_scores, video_names, timestamps, image_names
+            )
         ]
     }
 
@@ -277,7 +297,7 @@ def generate_pdf_report(req: OpenrouterRequest):
     logger.info("Generating captions...")
     centroid_captions = []
     for cluster_id, img_idx in tqdm(centroid_images.items()):
-        img_path, video_filename, timestamp = metadata[img_idx]
+        img_path, video_filename, timestamp, _ = metadata[img_idx]
         caption = describe_image(
             img_path,
             device=device,
@@ -302,10 +322,10 @@ def generate_pdf_report(req: OpenrouterRequest):
 
     # Step 6: Create PDF
     # TODO - name report with used model + timestamp?
-    if not os.path.exists(report_dir):
-        logger.info(f"Reports directory not found, creating {report_dir}.")
-        os.makedirs(report_dir)
-    output_pdf = report_dir + "/report.pdf"
+    if not os.path.exists(REPORT_DIR):
+        logger.info(f"Reports directory not found, creating {REPORT_DIR}.")
+        os.makedirs(REPORT_DIR)
+    output_pdf = REPORT_DIR + "/report.pdf"
     ready_pdf = prepare_pdf(llm_data, output_pdf)
     ready_pdf.save()
     logger.info(f"PDF created at {output_pdf}")

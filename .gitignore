@@ -3,12 +3,11 @@
 
 # Ignore working directories
 /videos/frames/
-/app
-/db
-/temp
-/reports
-/uploads
-/__pycache__
+/app/
+/db/
+/temp/
+/uploads/
+/__pycache__/
 
 # macOS system files
 .DS_Store
@@ -20,3 +19,4 @@ app.log
 
 # Ignore testing files
 /reports/*.pdf
+tests.ipynb
