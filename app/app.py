@@ -1,11 +1,11 @@
 from nicegui import ui
 import httpx
-import asyncio
+import json
+import socket
 import os
 import subprocess
 import sys
 from datetime import timedelta
-from pathlib import Path
 from typing import Optional
 import tkinter as tk
 from tkinter import filedialog
@@ -91,6 +91,7 @@ with progress_dialog:
     with ui.card().classes("w-96"):
         ui.label("Обработка видео").classes("text-xl font-bold")
         progress_area = ui.log(max_lines=50).classes("h-64")
+
 
 # TODO - trigger /generate_scene_captions after running this
 async def extract_frames_and_embeddings():
@@ -207,36 +208,68 @@ def show_video_preview(video_name: str, timestamp: float):
     video_dialog.open()
 
 
+def create_on_click_mrk_button(video_name, timestamp):
+    def on_click():
+        ui.notify("⏳ Sending to Resolve...", color="warning")
+
+        # FIXME - provide actual path instead of the bullshit on next line
+        # FIXME - grab the query name and use it as marker name / note
+        # TODO - also make the color selectable
+        success = send_payload_to_resolve(
+            video_path=f"/Users/aleko/Downloads/test_video_dir/{video_name}",
+            target_marker_secs=timestamp,
+            marker_color="Lemon",
+            marker_name="test",
+            marker_note="testttt",
+        )
+
+        if success:
+            ui.notify("✅ Marker added!", color="positive")
+        else:
+            ui.notify("❌ Failed to add marker", color="negative")
+
+    return on_click
+
+
+
 def update_results_display():
     results_container.clear()
     with results_container:
         with ui.row().classes("gap-4 flex-wrap"):
             for result in state.query_results:
-                with (
-                    ui.element("div")
-                    .classes("cursor-pointer")
-                    .on(
-                        "click",
-                        lambda e, r=result: show_video_preview(
-                            r["video_name"], r["timestamp"]
-                        ),
-                    )
-                ):
+                video_name = result["video_name"]
+                timestamp = result["timestamp"]
+                image_name = result["image_name"]
+                score = result["score"]
+
+                with ui.element("div").classes("cursor-pointer"
+                    # TODO - bring back the player
+                    # .on(
+                    #     "click",
+                    #     lambda e, r=result: show_video_preview(
+                    #         r["video_name"], r["timestamp"]
+                    #     ),
+                    ):
                     with (
                         ui.card()
                         .tight()
                         .classes("rounded-lg w-64")
                         .style("box-shadow: 0 4px 20px rgba(99, 102, 241, 0.3);")
                     ):
-                        ui.image(f"{API_URL}/frames/{result['image_name']}").classes(
+                        ui.image(f"{API_URL}/frames/{image_name}").classes(
                             "w-full rounded-t-lg"
                         )
                         with ui.card_section():
-                            ui.label(f"🎞 Видео: {result['video_name']}")
+                            ui.label(f"🎞 Видео: {video_name}")
                             ui.label(
-                                f"🕑 Время: {str(timedelta(seconds=int(result['timestamp'])))}"
+                                f"🕑 Время: {str(timedelta(seconds=int(timestamp)))}"
                             )
-                            ui.label(f"🔍 Сходство: {result['score']:.2f}")
+                            ui.label(f"🔍 Сходство: {score:.2f}")
+
+                            # ✅ Button gets the correct per-card handler
+                            ui.button("Send Marker", on_click=create_on_click_mrk_button(video_name, timestamp)).props(
+                                "color=accent"
+                            )
 
 
 def open_pdf():
@@ -252,6 +285,56 @@ def open_pdf():
             ui.notify("Неизвестная платформа, не могу открыть PDF", type="negative")
     else:
         ui.notify("PDF файл не найден", type="negative")
+
+
+def prepare_payload(
+    video_path,
+    target_marker_secs,
+    marker_color,
+    marker_name,
+    marker_note,
+    exit_command=False,
+):
+    if not exit_command:
+        payload = {
+            "VIDEO_PATH": video_path,
+            "TARGET_MARKER_SECS": target_marker_secs,
+            "MARKER_COLOR": marker_color,
+            "MARKER_NAME": marker_name,
+            "MARKER_NOTE": marker_note,
+            "MARKER_DURATION": 10,
+        }
+        return json.dumps(payload).encode("utf-8")
+    else:
+        return b"shutdown"
+
+# TODO - add logic to shutdown resolve controller
+def send_payload_to_resolve(
+    video_path,
+    target_marker_secs,
+    marker_color,
+    marker_name,
+    marker_note,
+    exit_command=False,
+):
+    payload = prepare_payload(
+        video_path,
+        target_marker_secs,
+        marker_color,
+        marker_name,
+        marker_note,
+        exit_command,
+    )
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.connect(("localhost", 65432))
+            s.sendall(payload)
+            response_data = s.recv(4096)
+            response = json.loads(response_data.decode("utf-8"))
+            return response.get("status") == 200
+    except Exception:
+        return False
 
 
 # Создаем UI
@@ -320,6 +403,18 @@ with ui.tab_panels(tabs, value=query_tab).classes("w-full"):
             num_results_input.bind_value_to(state, "k")
             ui.button(
                 "Искать", on_click=lambda: query_similar_images(state.k), icon="search"
+            ).classes("ml-2").props("color=accent text-color=white rounded")
+            ui.button(
+                "RESOLVE",
+                on_click=lambda: send_payload_to_resolve(
+                    video_path="/Users/aleko/Documents/elbrus_bootcamp/ds-phase-3/_FINAL_PROJECT/wedding_stream.mp4",
+                    target_marker_secs=120,
+                    marker_color="Lemon",
+                    marker_name="www",
+                    marker_note="yyy",
+                    exit_command=False,
+                ),
+                icon="search",
             ).classes("ml-2").props("color=accent text-color=white rounded")
 
         results_container = ui.column().classes("w-full mt-4 gap-4")
