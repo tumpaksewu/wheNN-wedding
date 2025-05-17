@@ -3,6 +3,7 @@ import socket
 import json
 import sys
 import time
+import cv2
 
 # === SOCKET CONFIGURATION ===
 HOST = "localhost"
@@ -23,14 +24,6 @@ def handle_marker_request(payload):
 
     print(f"\n📩 Received request for marker at {TARGET_MARKER_SECS}s.")
 
-    if not os.path.exists(VIDEO_PATH):
-        print(f"❌ File not found: {VIDEO_PATH}")
-        return
-
-    TARGET_MARKER_FRAME = int(
-        project.GetSetting("timelineFrameRate") * TARGET_MARKER_SECS
-    )
-
     # Open Media page
     resolve.OpenPage("media")
 
@@ -46,7 +39,7 @@ def handle_marker_request(payload):
     clips = rootBin.GetClipList()
     if not clips or not clips[0]:
         print(
-            "Error: MediaPool root bin doesn't contain any clips, add one clip (recommended clip duration >= 80 frames) and try again!"
+            "Project's media folder doesn't contain any clips, we'll try importing..."
         )
 
     target_filename = os.path.basename(VIDEO_PATH)
@@ -56,7 +49,7 @@ def handle_marker_request(payload):
     for c in clips:
         if c.GetName() == target_filename:
             clip = c
-            print(f"📎 Clip '{target_filename}' already exists in Media Pool.")
+            print(f"Clip '{target_filename}' already exists in Media Pool.")
             break
 
     # If not found, import it
@@ -75,17 +68,23 @@ def handle_marker_request(payload):
         print("⚠️ Unable to get clip 'Frames' property.")
         return
     num_frames = int(frames_property)
-    print(f"🎞️ Clip '{clip.GetName()}' has {num_frames} frames.")
+    print(f"Clip '{clip.GetName()}' has {num_frames} frames.")
+
+    # Get clip's FPS to calculate the correct frame
+    clip_fps = clip.GetClipProperty().get("FPS")
+    target_marker_frame = round(float(clip_fps) * TARGET_MARKER_SECS)
 
     # Add Markers
-    if num_frames >= TARGET_MARKER_FRAME:
+    if num_frames >= target_marker_frame:
         isSuccess = clip.AddMarker(
-            TARGET_MARKER_FRAME, MARKER_COLOR, MARKER_NAME, MARKER_NOTE, MARKER_DURATION
+            target_marker_frame, MARKER_COLOR, MARKER_NAME, MARKER_NOTE, MARKER_DURATION
         )
         if isSuccess:
-            print(f"✅ Added marker at FrameId:{TARGET_MARKER_FRAME}")
+            print(
+                f"✅ Added marker at {TARGET_MARKER_SECS}s, FrameId:{target_marker_frame}"
+            )
         else:
-            print("❌ Failed to add marker")
+            print("❌ Failed to add marker. Maybe it already exists?")
     else:
         print("⚠️ Marker frame exceeds clip length.")
 
