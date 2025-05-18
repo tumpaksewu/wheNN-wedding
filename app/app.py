@@ -12,12 +12,13 @@ from tkinter import filedialog
 
 # Конфигурация
 API_URL = "http://localhost:8000"
+SETTINGS_PATH = "./settings.json"
 VIDEO_EXTS = {".mp4", ".avi", ".mov", ".MP4", ".AVI", ".MOV"}
 
 
 class AppState:
     def __init__(self):
-        self.video_dir: Optional[str] = None
+        self.video_dir: Optional[str] = ""
         self.selected_video: Optional[str] = None
         self.openrouter_user_api_key: str = ""
         self.openrouter_user_model: str = ""
@@ -27,12 +28,14 @@ class AppState:
         self.openrouter_default_model: str = "qwen/qwen3-30b-a3b:free"
         self.query_text: str = ""
         self.query_results = []
-        self.progress: float = 0
         self.progress_message: str = ""
         self.show_mount_button = False
         self.show_extract_button = False
         self.show_video_settings = True
         self.k = 6
+        self.resolve_controller_enabled = False
+        self.resolve_switch_active = False
+        self.marker_color = "Red"
 
 
 state = AppState()
@@ -48,8 +51,26 @@ ui.add_head_html("""
 """)
 
 
+def save_path_to_file():
+    try:
+        with open(SETTINGS_PATH, "w") as f:
+            json.dump({"video_dir": state.video_dir}, f)
+    except Exception as e:
+        ui.notify(f"Could not save settings: {e}", type="negative")
+
+
+def load_path_from_file():
+    if os.path.exists(SETTINGS_PATH):
+        try:
+            with open(SETTINGS_PATH, "r") as f:
+                data = json.load(f)
+                state.video_dir = data.get("video_dir", "")
+                ui.notify("Video path loaded", type="info")
+        except Exception:
+            return None
+
+
 def select_folder():
-    """Функция выбора папки с использованием Tkinter"""
     root = tk.Tk()
     root.withdraw()
     root.wm_attributes("-topmost", 1)
@@ -81,6 +102,8 @@ async def mount_and_list():
         ui.notify(
             f"Успешно загружено {len(data['video_files'])} видео", type="positive"
         )
+
+        save_path_to_file()
     except Exception as e:
         ui.notify(f"Ошибка: {str(e)}", type="negative")
 
@@ -117,18 +140,13 @@ async def extract_frames_and_embeddings():
                         message = line[5:].strip()
 
                         if message == "DONE":
-                            state.progress = 100
                             progress_area.push("✅ Завершено.")
-                            state.show_video_settings = False  # <- Hide the label here
+                            state.show_video_settings = False
                             ui.notify("Обработка завершена", type="positive")
                             break
 
                         # Add line to UI
                         progress_area.push(message)
-
-                        # Fake progress bar increment
-                        if state.progress < 95:
-                            state.progress += 5
 
         progress_dialog.close()
 
@@ -210,26 +228,21 @@ def show_video_preview(video_name: str, timestamp: float):
 
 def create_on_click_mrk_button(video_name, timestamp):
     def on_click():
-        ui.notify("⏳ Sending to Resolve...", color="warning")
-
-        # FIXME - provide actual path instead of the bullshit on next line
-        # FIXME - grab the query name and use it as marker name / note
-        # TODO - also make the color selectable
+        # FIXME - find some use for marker_note
         success = send_payload_to_resolve(
-            video_path=f"/Users/aleko/Downloads/test_video_dir/{video_name}",
+            video_path=f"{state.video_dir}/{video_name}",
             target_marker_secs=timestamp,
-            marker_color="Lemon",
-            marker_name="test",
+            marker_color=state.marker_color,
+            marker_name=state.query_text,
             marker_note="testttt",
         )
 
         if success:
-            ui.notify("✅ Marker added!", color="positive")
+            ui.notify("✅ Маркер добавлен!", color="positive")
         else:
-            ui.notify("❌ Failed to add marker", color="negative")
+            ui.notify("❌ Не удалось добавить маркер", color="negative")
 
     return on_click
-
 
 
 def update_results_display():
@@ -242,34 +255,33 @@ def update_results_display():
                 image_name = result["image_name"]
                 score = result["score"]
 
-                with ui.element("div").classes("cursor-pointer"
-                    # TODO - bring back the player
-                    # .on(
-                    #     "click",
-                    #     lambda e, r=result: show_video_preview(
-                    #         r["video_name"], r["timestamp"]
-                    #     ),
-                    ):
-                    with (
-                        ui.card()
-                        .tight()
-                        .classes("rounded-lg w-64")
-                        .style("box-shadow: 0 4px 20px rgba(99, 102, 241, 0.3);")
-                    ):
-                        ui.image(f"{API_URL}/frames/{image_name}").classes(
-                            "w-full rounded-t-lg"
-                        )
-                        with ui.card_section():
-                            ui.label(f"🎞 Видео: {video_name}")
-                            ui.label(
-                                f"🕑 Время: {str(timedelta(seconds=int(timestamp)))}"
-                            )
-                            ui.label(f"🔍 Сходство: {score:.2f}")
+                with (
+                    ui.card()
+                    .tight()
+                    .classes("rounded-lg w-64 relative")
+                    .style("box-shadow: 0 4px 20px rgba(99, 102, 241, 0.3);")
+                ):
+                    ui.image(f"{API_URL}/frames/{image_name}").classes(
+                        "w-full rounded-t-lg cursor-pointer"
+                    ).on(
+                        "click",
+                        lambda e, r=result: show_video_preview(
+                            r["video_name"], r["timestamp"]
+                        ),
+                    )
 
-                            # ✅ Button gets the correct per-card handler
-                            ui.button("Send Marker", on_click=create_on_click_mrk_button(video_name, timestamp)).props(
-                                "color=accent"
-                            )
+                    ui.button(
+                        "",
+                        icon="push_pin",
+                        on_click=create_on_click_mrk_button(video_name, timestamp),
+                    ).props("round dense flat").classes(
+                        "absolute top-2 right-2 z-10 backdrop-blur-sm bg-black/30 text-white border border-black/30 hover:bg-black/50"
+                    ).bind_visibility_from(state, "resolve_controller_enabled")
+
+                    with ui.card_section():
+                        ui.label(f"🎞 Видео: {video_name}")
+                        ui.label(f"🕑 Время: {str(timedelta(seconds=int(timestamp)))}")
+                        ui.label(f"🔍 Сходство: {score:.2f}")
 
 
 def open_pdf():
@@ -287,26 +299,42 @@ def open_pdf():
         ui.notify("PDF файл не найден", type="negative")
 
 
-def prepare_payload(
-    video_path,
-    target_marker_secs,
-    marker_color,
-    marker_name,
-    marker_note,
-    exit_command=False,
-):
-    if not exit_command:
-        payload = {
-            "VIDEO_PATH": video_path,
-            "TARGET_MARKER_SECS": target_marker_secs,
-            "MARKER_COLOR": marker_color,
-            "MARKER_NAME": marker_name,
-            "MARKER_NOTE": marker_note,
-            "MARKER_DURATION": 10,
-        }
-        return json.dumps(payload).encode("utf-8")
+def is_resolve_controller_active(host="127.0.0.1", port=65432, timeout=0.3):
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            state.resolve_controller_enabled = True
+            ui.notify("Установлено подключение к Resolve Controller", type="positive")
+            return True
+    except (ConnectionRefusedError, socket.timeout, OSError):
+        state.resolve_controller_enabled = False
+        ui.notify("Не удалось подключиться к Resolve Controller", type="negative")
+        return False
+
+
+async def handle_switch(e):
+    switch_position = e.args[0]
+    if switch_position:
+        # User is trying to turn ON the controller
+        if is_resolve_controller_active():
+            ui.notify("Контроллер включён", type="positive")
+            state.resolve_controller_enabled = True
+        else:
+            # If controller not available, revert switch back to OFF
+            ui.notify("Не удалось подключиться к Resolve Controller", type="negative")
+            state.resolve_switch_active = False
     else:
-        return b"shutdown"
+        # User is turning OFF
+        disable_controller()
+
+
+def disable_controller():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.connect(("localhost", 65432))
+        s.sendall(b"shutdown")
+    state.resolve_switch_active = False
+    state.resolve_controller_enabled = False
+    ui.notify("Контроллер отключён", color="orange")
+
 
 # TODO - add logic to shutdown resolve controller
 def send_payload_to_resolve(
@@ -315,21 +343,19 @@ def send_payload_to_resolve(
     marker_color,
     marker_name,
     marker_note,
-    exit_command=False,
 ):
-    payload = prepare_payload(
-        video_path,
-        target_marker_secs,
-        marker_color,
-        marker_name,
-        marker_note,
-        exit_command,
-    )
-
+    payload = {
+        "VIDEO_PATH": video_path,
+        "TARGET_MARKER_SECS": target_marker_secs,
+        "MARKER_COLOR": marker_color,
+        "MARKER_NAME": marker_name,
+        "MARKER_NOTE": marker_note,
+        "MARKER_DURATION": 10,
+    }
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.connect(("localhost", 65432))
-            s.sendall(payload)
+            s.sendall(json.dumps(payload).encode("utf-8"))
             response_data = s.recv(4096)
             response = json.loads(response_data.decode("utf-8"))
             return response.get("status") == 200
@@ -342,7 +368,7 @@ with ui.header().classes("justify-between text-white bg-slate-800"):
     ui.label("Анализ видео").classes("text-2xl font-bold")
     ui.dark_mode().bind_value(ui.query("body"), "dark")
 
-with ui.left_drawer().classes("bg-slate-900 p-4 w-64"):
+with ui.left_drawer().classes("bg-slate-900 p-4 w-64") as drawer:
     ui.label("⚙️ Настройки").classes("text-xl font-bold mb-4")
 
     # Выбор папки с видео
@@ -351,9 +377,10 @@ with ui.left_drawer().classes("bg-slate-900 p-4 w-64"):
         .classes("items-center w-full")
         .bind_visibility_from(state, "show_video_settings")
     )
+    load_path_from_file()
     with video_settings:
         video_dir_input = (
-            ui.input("Путь к папке")
+            ui.input("Путь к папке", value=state.video_dir)
             .bind_value_to(state, "video_dir")
             .classes("flex-grow")
         )
@@ -365,7 +392,8 @@ with ui.left_drawer().classes("bg-slate-900 p-4 w-64"):
             .classes("w-full")
             .props("color=accent text-color=white rounded")
         )
-        mount_button.bind_visibility_from(state, "show_mount_button")
+        # mount_button.bind_visibility_from(state, "show_mount_button")
+        mount_button.bind_visibility_from(state, "video_dir")
         extract_button = (
             ui.button(
                 "Извлечь кадры",
@@ -383,6 +411,17 @@ with ui.left_drawer().classes("bg-slate-900 p-4 w-64"):
         "w-full"
     )
     ui.input("Модель").bind_value_to(state, "openrouter_user_model").classes("w-full")
+
+    # Настройки Resolve Controller
+    # TODO - добавить проверку, запущен ли он. Показывать блок только если да + кнопки маркеров в результатах
+    # Marker color picker
+    ui.label("Resolve Controller").classes("text-lg font-bold mt-4")
+
+    with ui.row():
+        resolve_switch = ui.switch("Resolve Controller").bind_value(
+            state, "resolve_switch_active"
+        )
+        resolve_switch.on("update:model-value", handle_switch)
 
 with ui.tabs().classes("w-full mt-4") as tabs:
     query_tab = ui.tab("Поиск по видео", icon="search")
@@ -403,18 +442,6 @@ with ui.tab_panels(tabs, value=query_tab).classes("w-full"):
             num_results_input.bind_value_to(state, "k")
             ui.button(
                 "Искать", on_click=lambda: query_similar_images(state.k), icon="search"
-            ).classes("ml-2").props("color=accent text-color=white rounded")
-            ui.button(
-                "RESOLVE",
-                on_click=lambda: send_payload_to_resolve(
-                    video_path="/Users/aleko/Documents/elbrus_bootcamp/ds-phase-3/_FINAL_PROJECT/wedding_stream.mp4",
-                    target_marker_secs=120,
-                    marker_color="Lemon",
-                    marker_name="www",
-                    marker_note="yyy",
-                    exit_command=False,
-                ),
-                icon="search",
             ).classes("ml-2").props("color=accent text-color=white rounded")
 
         results_container = ui.column().classes("w-full mt-4 gap-4")
