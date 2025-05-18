@@ -1,18 +1,23 @@
 from nicegui import ui
 import httpx
 import json
+import csv
 import socket
 import os
 import subprocess
 import sys
-from datetime import timedelta
+import webbrowser
+from datetime import timedelta, datetime
 from typing import Optional
 import tkinter as tk
 from tkinter import filedialog
 
+
 # Конфигурация
 API_URL = "http://localhost:8000"
-SETTINGS_PATH = "./settings.json"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SETTINGS_PATH = os.path.join(SCRIPT_DIR, "settings.json")
+SEARCH_HISTORY_PATH = os.path.join(SCRIPT_DIR, "search_history.csv")
 VIDEO_EXTS = {".mp4", ".avi", ".mov", ".MP4", ".AVI", ".MOV"}
 
 
@@ -39,7 +44,13 @@ class AppState:
 
 
 state = AppState()
-ui.dark_mode().enable()
+
+ui.colors(
+    primary="purple",
+    secondary="#2A004E",
+    dark="#2b2b2b",
+    dark_page="#181818",
+)
 
 ui.add_head_html("""
 <style>
@@ -49,6 +60,9 @@ ui.add_head_html("""
 }
 </style>
 """)
+ui.add_head_html(
+    '<link href="https://unpkg.com/eva-icons@1.1.3/style/eva-icons.css" rel="stylesheet" />'
+)
 
 
 def save_path_to_file():
@@ -156,15 +170,16 @@ async def extract_frames_and_embeddings():
         progress_dialog.close()
 
 
-async def query_similar_images(k: int):
-    if not state.query_text:
+async def query_similar_images(k: int, history_query=None):
+    query = history_query or state.query_text
+    if not query:
         ui.notify("Пожалуйста, введите запрос", type="negative")
         return
 
     try:
         response = httpx.post(
             f"{API_URL}/query_similar_images",
-            json={"query": state.query_text, "k": k},
+            json={"query": query, "k": k},
             timeout=30,
         )
         response.raise_for_status()
@@ -173,9 +188,23 @@ async def query_similar_images(k: int):
         state.query_results = data.get("results", [])
         update_results_display()
 
+        log_search_query(query)
+        update_drawer()
+
         ui.notify(f"Найдено {len(state.query_results)} результатов", type="positive")
     except Exception as e:
         ui.notify(f"Ошибка: {str(e)}", type="negative")
+
+
+def log_search_query(query: str):
+    timestamp = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+    file_exists = os.path.isfile(SEARCH_HISTORY_PATH)
+
+    with open(SEARCH_HISTORY_PATH, mode="a", newline="", encoding="utf-8") as file:
+        writer = csv.writer(file)
+        if not file_exists:
+            writer.writerow(["timestamp", "query"])
+        writer.writerow([timestamp, query])
 
 
 async def generate_pdf_report():
@@ -258,8 +287,10 @@ def update_results_display():
                 with (
                     ui.card()
                     .tight()
-                    .classes("rounded-lg w-64 relative")
-                    .style("box-shadow: 0 4px 20px rgba(99, 102, 241, 0.3);")
+                    .classes(
+                        "rounded-lg w-64 relative transition-all duration-200 hover:shadow-xl hover:scale-105"
+                    )
+                    .props("flat bordered")
                 ):
                     ui.image(f"{API_URL}/frames/{image_name}").classes(
                         "w-full rounded-t-lg cursor-pointer"
@@ -275,7 +306,7 @@ def update_results_display():
                         icon="push_pin",
                         on_click=create_on_click_mrk_button(video_name, timestamp),
                     ).props("round dense flat").classes(
-                        "absolute top-2 right-2 z-10 backdrop-blur-sm bg-black/30 text-white border border-black/30 hover:bg-black/50"
+                        "absolute top-2 right-2 z-10 backdrop-blur-sm text-white hover:bg-black/50"
                     ).bind_visibility_from(state, "resolve_controller_enabled")
 
                     with ui.card_section():
@@ -336,7 +367,6 @@ def disable_controller():
     ui.notify("Контроллер отключён", color="orange")
 
 
-# TODO - add logic to shutdown resolve controller
 def send_payload_to_resolve(
     video_path,
     target_marker_secs,
@@ -363,15 +393,90 @@ def send_payload_to_resolve(
         return False
 
 
-# Создаем UI
-with ui.header().classes("justify-between text-white bg-slate-800"):
-    ui.label("Анализ видео").classes("text-2xl font-bold")
-    ui.dark_mode().bind_value(ui.query("body"), "dark")
+def history_helper():
+    settings_drawer.hide()
+    history_drawer.toggle()
 
-with ui.left_drawer().classes("bg-slate-900 p-4 w-64") as drawer:
+
+# Function to load history from CSV
+def load_search_history():
+    history = []
+    try:
+        with open(SEARCH_HISTORY_PATH, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                history.append(row)
+    except FileNotFoundError:
+        pass
+    return history
+
+
+# Function to update drawer UI with reversed history
+def update_drawer():
+    timeline.clear()
+    history = load_search_history()
+    for entry in reversed(history):
+        timestamp = entry["timestamp"]
+        query = entry["query"]
+        with timeline:
+            with ui.timeline_entry().props("side='right'"):
+                history_entry = (
+                    ui.chip(query, icon="search")
+                    .props("clickable text-color=white")
+                    .classes("hover:shadow-xl hover:scale-110")
+                )
+
+                def make_click_handler(q):
+                    async def handler(_):  # <-- async-safe handler
+                        print(f"Running query: {q}")
+                        await query_similar_images(state.k, q)
+
+                    return handler
+
+                history_entry.on("click", make_click_handler(query))
+                ui.label(timestamp).classes("text-sm text-gray-500")
+
+
+def update_k(delta: int):
+    state.k = max(1, min(18, state.k + delta))  # clamp between 1 and 18
+
+
+# MAIN UI —————————————————————————————
+with ui.header().classes("bg-secondary flex justify-between items-center px-4"):
+    # LEFT SECTION
+    with ui.row().classes("items-center gap-4 flex-nowrap"):
+        ui.button(on_click=lambda: settings_drawer.toggle(), icon="menu").props(
+            "outline rounded color=slate-20"
+        )
+        with ui.column().classes("leading-none justify-center -space-y-1"):
+            ui.label("wheNN [wedding]").classes("text-sm font-bold leading-none")
+            ui.label("> Build 1.4.1").classes("text-xs opacity-70 leading-none")
+
+        with ui.tabs().classes("ml-4") as tabs:
+            query_tab = ui.tab("Поиск по видео", icon="search")
+            report_tab = ui.tab("Отчет", icon="description")
+
+    # RIGHT SECTION
+    with ui.row().classes("items-center gap-4"):
+        ui.switch("").props(
+            "dark=true checked-icon=dark_mode unchecked-icon=light_mode"
+        ).bind_value(ui.dark_mode()).classes("text-white")
+        ui.button(
+            icon="eva-github",
+            on_click=lambda: webbrowser.open(
+                "https://github.com/tumpaksewu/wheNN-wedding"
+            ),
+        ).props("outline round text-color=white")
+        ui.button(on_click=lambda: history_helper(), icon="history").props(
+            "outline round color=slate-20"
+        )
+
+with ui.left_drawer().classes("p-4 w-64 shadow-lg") as settings_drawer:
     ui.label("⚙️ Настройки").classes("text-xl font-bold mb-4")
+    ui.separator()
 
     # Выбор папки с видео
+    ui.label("Рабочая папка").classes("text-lg font-bold mt-4")
     video_settings = (
         ui.row()
         .classes("items-center w-full")
@@ -385,12 +490,14 @@ with ui.left_drawer().classes("bg-slate-900 p-4 w-64") as drawer:
             .classes("flex-grow")
         )
         ui.button(icon="folder", on_click=select_folder).props(
-            "color=accent text-color=white rounded"
+            "text-color=white rounded"
         )
         mount_button = (
-            ui.button("Монтировать папку", on_click=mount_and_list, icon="folder_open")
+            ui.button(
+                "Монтировать папку", on_click=mount_and_list, icon="drive_folder_upload"
+            )
             .classes("w-full")
-            .props("color=accent text-color=white rounded")
+            .props("text-color=white rounded")
         )
         # mount_button.bind_visibility_from(state, "show_mount_button")
         mount_button.bind_visibility_from(state, "video_dir")
@@ -423,40 +530,92 @@ with ui.left_drawer().classes("bg-slate-900 p-4 w-64") as drawer:
         )
         resolve_switch.on("update:model-value", handle_switch)
 
-with ui.tabs().classes("w-full mt-4") as tabs:
-    query_tab = ui.tab("Поиск по видео", icon="search")
-    report_tab = ui.tab("Отчет", icon="description")
+drawer_toggle = ui.element()
+with (
+    ui.right_drawer(value=False).bind_value(drawer_toggle).classes("p-4 w-64 shadow-lg")
+) as history_drawer:
+    ui.label("История").classes("text-xl font-bold mb-4")
+    ui.separator()
+    with ui.timeline(side="right") as timeline:
+        pass
 
-with ui.tab_panels(tabs, value=query_tab).classes("w-full"):
+with ui.tab_panels(tabs, value=query_tab).classes("w-full rounded-lg shadow-md"):
     with ui.tab_panel(query_tab):
-        ui.label("Поиск по видео").classes("text-lg mb-4")
         with ui.row().classes("w-full items-center"):
             ui.input("Поисковый запрос").bind_value_to(state, "query_text").classes(
-                "flex-grow"
-            ).props("rounded outlined dense")
-            num_results_input = (
-                ui.number(min=1, max=18, value=6)
-                .props("dense outlined rounded hide-bottom-space")
-                .classes("w-20")
-            )
-            num_results_input.bind_value_to(state, "k")
+                "flex-grow h-14"
+            ).props("clearable rounded outlined color=grey-7")
+            # Interactive num_results selector
+            with ui.row().classes("items-center"):
+                ui.button(icon="chevron_left", on_click=lambda: update_k(-1)).props(
+                    "flat round color=grey-7"
+                ).classes("w-14 h-14")
+
+                value_display = ui.label(f"{state.k}").classes(
+                    "text-xl w-10 text-center"
+                )
+
+                def refresh_label():
+                    value_display.text = str(state.k)
+
+                ui.button(icon="chevron_right", on_click=lambda: update_k(1)).props(
+                    "flat round color=grey-7"
+                ).classes("w-14 h-14")
+
+                # Auto-update display when state.k changes
+                ui.timer(0.1, refresh_label)
+
             ui.button(
                 "Искать", on_click=lambda: query_similar_images(state.k), icon="search"
-            ).classes("ml-2").props("color=accent text-color=white rounded")
+            ).classes("ml-2 h-14 px-4 text-lg").props("text-color=white rounded")
 
         results_container = ui.column().classes("w-full mt-4 gap-4")
+
+        with ui.page_sticky(x_offset=18, y_offset=18):
+            marker_color_picker = ui.element("q-fab").props(
+                "color=primary icon=palette direction=left"
+            )
+            with marker_color_picker:
+                ui.element("q-fab-action").props("icon=circle color=red-5").on(
+                    "click", lambda: setattr(state, "marker_color", "Red")
+                )
+                ui.element("q-fab-action").props("icon=circle color=green-5").on(
+                    "click", lambda: setattr(state, "marker_color", "Green")
+                )
+                ui.element("q-fab-action").props("icon=circle color=blue-5").on(
+                    "click", lambda: setattr(state, "marker_color", "Blue")
+                )
+                ui.element("q-fab-action").props("icon=circle color=cyan-5").on(
+                    "click", lambda: setattr(state, "marker_color", "Cyan")
+                )
+                ui.element("q-fab-action").props("icon=circle color=pink-5").on(
+                    "click", lambda: setattr(state, "marker_color", "Pink")
+                )
+                ui.element("q-fab-action").props("icon=circle color=lime-5").on(
+                    "click", lambda: setattr(state, "marker_color", "Lemon")
+                )
+
+    marker_color_picker.bind_visibility_from(state, "resolve_controller_enabled")
 
     with ui.tab_panel(report_tab):
         ui.label("Генерация отчета").classes("text-lg mb-4")
         ui.button(
             "Создать PDF", on_click=generate_pdf_report, icon="picture_as_pdf"
-        ).classes("w-full")
+        ).classes("w-full").props("text-color=white rounded")
 
-        open_pdf_button = ui.button(
-            "Открыть отчет", on_click=open_pdf, icon="open_in_new"
-        ).classes("w-full mt-4")
+        open_pdf_button = (
+            ui.button("Открыть отчет", on_click=open_pdf, icon="open_in_new")
+            .classes("w-full mt-4")
+            .props("text-color=white rounded")
+        )
         open_pdf_button.visible = False
 
+    update_drawer()
+
 ui.run(
-    title="Анализ видео", reload=False, native=True, port=8001, window_size=(1200, 800)
+    title="wheNN[wedding]",
+    reload=False,
+    native=True,
+    port=8001,
+    window_size=(1200, 800),
 )
