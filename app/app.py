@@ -1,4 +1,4 @@
-from nicegui import ui
+from nicegui import app, ui
 import httpx
 import json
 import csv
@@ -27,10 +27,6 @@ class AppState:
         self.selected_video: Optional[str] = None
         self.openrouter_user_api_key: str = ""
         self.openrouter_user_model: str = ""
-        self.openrouter_default_api_key: str = (
-            "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"
-        )
-        self.openrouter_default_model: str = "qwen/qwen3-30b-a3b:free"
         self.query_text: str = ""
         self.query_results = []
         self.progress_message: str = ""
@@ -65,23 +61,34 @@ ui.add_head_html(
 )
 
 
-def save_path_to_file():
+def save_settings_to_file():
     try:
         with open(SETTINGS_PATH, "w") as f:
-            json.dump({"video_dir": state.video_dir}, f)
+            json.dump(
+                {
+                    "video_dir": state.video_dir,
+                    "openrouter_user_api_key": state.openrouter_user_api_key,
+                    "openrouter_user_model": state.openrouter_user_model,
+                },
+                f,
+            )
+            ui.notify("Настройки OpenRouter сохранены!", type="positive")
     except Exception as e:
         ui.notify(f"Could not save settings: {e}", type="negative")
 
 
-def load_path_from_file():
+def load_settings_from_file():
     if os.path.exists(SETTINGS_PATH):
         try:
             with open(SETTINGS_PATH, "r") as f:
-                data = json.load(f)
-                state.video_dir = data.get("video_dir", "")
-                ui.notify("Video path loaded", type="info")
-        except Exception:
-            return None
+                settings = json.load(f)
+                state.video_dir = settings.get("video_dir", "")
+                state.openrouter_user_api_key = settings.get(
+                    "openrouter_user_api_key", ""
+                )
+                state.openrouter_user_model = settings.get("openrouter_user_model", "")
+        except Exception as e:
+            ui.notify(f"Could not load settings: {e}", type="warning")
 
 
 def select_folder():
@@ -117,7 +124,7 @@ async def mount_and_list():
             f"Успешно загружено {len(data['video_files'])} видео", type="positive"
         )
 
-        save_path_to_file()
+        save_settings_to_file()
     except Exception as e:
         ui.notify(f"Ошибка: {str(e)}", type="negative")
 
@@ -171,15 +178,15 @@ async def extract_frames_and_embeddings():
 
 
 async def query_similar_images(k: int, history_query=None):
-    query = history_query or state.query_text
-    if not query:
+    state.query_text = history_query
+    if not state.query_text:
         ui.notify("Пожалуйста, введите запрос", type="negative")
         return
 
     try:
         response = httpx.post(
             f"{API_URL}/query_similar_images",
-            json={"query": query, "k": k},
+            json={"query": state.query_text, "k": k},
             timeout=30,
         )
         response.raise_for_status()
@@ -188,8 +195,8 @@ async def query_similar_images(k: int, history_query=None):
         state.query_results = data.get("results", [])
         update_results_display()
 
-        log_search_query(query)
-        update_drawer()
+        log_search_query(state.query_text)
+        update_history_drawer()
 
         ui.notify(f"Найдено {len(state.query_results)} результатов", type="positive")
     except Exception as e:
@@ -213,10 +220,8 @@ async def generate_pdf_report():
             response = await client.post(
                 f"{API_URL}/generate_pdf_report",
                 json={
-                    "openrouter_api_key": state.openrouter_user_api_key
-                    or state.openrouter_default_api_key,
-                    "openrouter_model": state.openrouter_user_model
-                    or state.openrouter_default_model,
+                    "openrouter_api_key": state.openrouter_user_api_key,
+                    "openrouter_model": state.openrouter_user_model,
                 },
             )
 
@@ -269,7 +274,10 @@ def create_on_click_mrk_button(video_name, timestamp):
         if success:
             ui.notify("✅ Маркер добавлен!", color="positive")
         else:
-            ui.notify("❌ Не удалось добавить маркер", color="negative")
+            ui.notify(
+                "❌ Не удалось добавить маркер. Возможно, он уже существует?",
+                color="negative",
+            )
 
     return on_click
 
@@ -342,7 +350,7 @@ def is_resolve_controller_active(host="127.0.0.1", port=65432, timeout=0.3):
         return False
 
 
-async def handle_switch(e):
+async def handle_resolve_switch(e):
     switch_position = e.args[0]
     if switch_position:
         # User is trying to turn ON the controller
@@ -412,7 +420,7 @@ def load_search_history():
 
 
 # Function to update drawer UI with reversed history
-def update_drawer():
+def update_history_drawer():
     timeline.clear()
     history = load_search_history()
     for entry in reversed(history):
@@ -442,6 +450,8 @@ def update_k(delta: int):
 
 
 # MAIN UI —————————————————————————————
+load_settings_from_file()
+
 with ui.header().classes("bg-secondary flex justify-between items-center px-4"):
     # LEFT SECTION
     with ui.row().classes("items-center gap-4 flex-nowrap"):
@@ -482,7 +492,6 @@ with ui.left_drawer().classes("p-4 w-64 shadow-lg") as settings_drawer:
         .classes("items-center w-full")
         .bind_visibility_from(state, "show_video_settings")
     )
-    load_path_from_file()
     with video_settings:
         video_dir_input = (
             ui.input("Путь к папке", value=state.video_dir)
@@ -514,21 +523,23 @@ with ui.left_drawer().classes("p-4 w-64 shadow-lg") as settings_drawer:
 
     # Настройки OpenRouter
     ui.label("OpenRouter API").classes("text-lg font-bold mt-4")
-    ui.input("API ключ").bind_value_to(state, "openrouter_user_api_key").classes(
-        "w-full"
+    ui.input("API ключ", value=state.openrouter_user_api_key).bind_value_to(
+        state, "openrouter_user_api_key"
+    ).classes("w-full")
+    ui.input("Модель", value=state.openrouter_user_model).bind_value_to(
+        state, "openrouter_user_model"
+    ).classes("w-full")
+    ui.button("Сохранить", on_click=save_settings_to_file).classes("w-full").props(
+        "text-color=white rounded"
     )
-    ui.input("Модель").bind_value_to(state, "openrouter_user_model").classes("w-full")
 
     # Настройки Resolve Controller
-    # TODO - добавить проверку, запущен ли он. Показывать блок только если да + кнопки маркеров в результатах
-    # Marker color picker
     ui.label("Resolve Controller").classes("text-lg font-bold mt-4")
-
     with ui.row():
         resolve_switch = ui.switch("Resolve Controller").bind_value(
             state, "resolve_switch_active"
         )
-        resolve_switch.on("update:model-value", handle_switch)
+        resolve_switch.on("update:model-value", handle_resolve_switch)
 
 drawer_toggle = ui.element()
 with (
@@ -571,6 +582,7 @@ with ui.tab_panels(tabs, value=query_tab).classes("w-full rounded-lg shadow-md")
 
         results_container = ui.column().classes("w-full mt-4 gap-4")
 
+        # Resolve marker color picker
         with ui.page_sticky(x_offset=18, y_offset=18):
             marker_color_picker = ui.element("q-fab").props(
                 "color=primary icon=palette direction=left"
@@ -610,7 +622,7 @@ with ui.tab_panels(tabs, value=query_tab).classes("w-full rounded-lg shadow-md")
         )
         open_pdf_button.visible = False
 
-    update_drawer()
+    update_history_drawer()
 
 ui.run(
     title="wheNN[wedding]",
