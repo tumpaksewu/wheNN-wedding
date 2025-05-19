@@ -67,8 +67,8 @@ logger.info(f"Using device: {device}")
 # TODO - allow user to set their own input video dir
 REPORT_DIR = "./reports"
 
-SERVER_VIDEO_DIR = "http://localhost:8000/videos"
-SERVER_FRAMES_DIR = "http://localhost:8000/frames"
+SERVER_VIDEO_DIR = "http://0.0.0.0:8000/videos"
+SERVER_FRAMES_DIR = "http://0.0.0.0:8000/frames"
 
 clip_model = CLIPModel.from_pretrained("laion/CLIP-ViT-B-32-laion2B-s34B-b79K").to(
     device
@@ -323,7 +323,7 @@ def generate_pdf_report(req: OpenrouterRequest):
     llm_response = request_scenarios(centroid_captions, api_key=api_key, model=model)
     raw_content = llm_response.json()["choices"][0]["message"]["content"]
     llm_data = decode_response(raw_content)
-    
+
     # Create PDF
     # TODO - name report with used model + timestamp?
     if not os.path.exists(REPORT_DIR):

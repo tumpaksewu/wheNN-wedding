@@ -1,4 +1,4 @@
-from nicegui import app, ui
+from nicegui import ui
 import httpx
 import json
 import csv
@@ -13,8 +13,19 @@ import tkinter as tk
 from tkinter import filedialog
 
 
-# Конфигурация
-API_URL = "http://localhost:8000"
+def get_local_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("10.255.255.255", 1))
+        ip = s.getsockname()[0]
+    except Exception:
+        ip = "127.0.0.1"
+    finally:
+        s.close()
+    return ip
+
+
+API_URL = f"http://{get_local_ip()}:8000"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_PATH = os.path.join(SCRIPT_DIR, "settings.json")
 SEARCH_HISTORY_PATH = os.path.join(SCRIPT_DIR, "search_history.csv")
@@ -178,7 +189,8 @@ async def extract_frames_and_embeddings():
 
 
 async def query_similar_images(k: int, history_query=None):
-    state.query_text = history_query
+    if history_query:
+        state.query_text = history_query
     if not state.query_text:
         ui.notify("Пожалуйста, введите запрос", type="negative")
         return
@@ -435,8 +447,8 @@ def update_history_drawer():
                 )
 
                 def make_click_handler(q):
-                    async def handler(_):  # <-- async-safe handler
-                        print(f"Running query: {q}")
+                    async def handler(_):
+                        history_drawer.hide()
                         await query_similar_images(state.k, q)
 
                     return handler
@@ -628,6 +640,7 @@ ui.run(
     title="wheNN[wedding]",
     reload=False,
     native=True,
+    host="0.0.0.0",
     port=8001,
     window_size=(1200, 800),
 )
