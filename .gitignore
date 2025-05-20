@@ -30,5 +30,6 @@ app.log
 /app/*.spec
 tests.ipynb
 .nicegui
+scenario_report.pdf
 
 *.spec
