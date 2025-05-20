@@ -1,4 +1,5 @@
 import torch
+import gc
 import os
 import sys
 import shutil
@@ -41,9 +42,6 @@ from helpers import (
 from multiprocessing import freeze_support  # noqa
 
 freeze_support()  # noqa
-
-# TODO - make the app clean up the frames folder (maybe something else?) when exiting
-# TODO - load hnsw index and metadata at startup safely, otherwise set to None
 
 
 def resource_path(relative_path):
@@ -93,12 +91,7 @@ tr_model = (
 )
 
 # FIXME
-logger.info("Loading BLIP2 model...")
 
-blip_processor = Blip2Processor.from_pretrained("Salesforce/blip2-opt-2.7b")
-blip_model = Blip2ForConditionalGeneration.from_pretrained(
-    "Salesforce/blip2-opt-2.7b", torch_dtype=torch.float16
-).to(device)
 
 # GLOBAL STATE
 image_paths, image_embeddings = [], None
@@ -281,6 +274,14 @@ def query_similar_images(req: QueryRequest):
 
 @app.get("/generate_scene_captions")
 def generate_scene_captions():
+    logger.info("Loading BLIP2 model...")
+
+    blip_processor = Blip2Processor.from_pretrained("Salesforce/blip2-opt-2.7b")
+    blip_model = Blip2ForConditionalGeneration.from_pretrained(
+        "Salesforce/blip2-opt-2.7b", torch_dtype=torch.float16
+    ).to(device)
+
+    logger.info("Getting captions...")
     hnsw_index, metadata = load_hnsw_index(db_dir=DB_DIR)
     if hnsw_index is None or metadata is None:
         return JSONResponse(content={"error": "Images not loaded yet"}, status_code=400)
@@ -327,7 +328,21 @@ def generate_scene_captions():
     else:
         logger.warning("Captions failed to build!")
 
+    logger.info("Deleting BLIP2 models and cleaning up...")
+    # Unload the model and processor
+    del blip_model
+    del blip_processor
 
+    # Run garbage collection
+    gc.collect()
+
+    # If using CUDA, clear the VRAM
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.ipc_collect()
+
+
+# TODO - timeout after 30/40s and ask user to try again (with a toast?)
 @app.post("/generate_pdf_report")
 def generate_pdf_report(req: OpenrouterRequest):
     api_key = f"Bearer {req.openrouter_api_key}"
@@ -358,8 +373,9 @@ def generate_pdf_report(req: OpenrouterRequest):
     if not os.path.exists(REPORT_DIR):
         logger.info(f"Reports directory not found, creating {REPORT_DIR}.")
         os.makedirs(REPORT_DIR)
+    files_dir = REPORT_DIR + "/lib"
     output_pdf = REPORT_DIR + "/report.pdf"
-    ready_pdf = prepare_pdf(llm_data, output_pdf)
+    ready_pdf = prepare_pdf(llm_data, files_dir, output_pdf)
     ready_pdf.save()
     logger.info(f"PDF created at {output_pdf}")
 

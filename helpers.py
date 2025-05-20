@@ -19,14 +19,15 @@ import hnswlib
 from sklearn.preprocessing import normalize
 from sklearn.decomposition import PCA
 
-from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
-from reportlab.lib.utils import ImageReader
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import cm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.lib.units import cm
-import textwrap
-
+from reportlab.lib.utils import ImageReader
+from reportlab.lib import colors
+from reportlab.platypus import Table, TableStyle, Paragraph
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
 # CLIP FUNCTIONS ———————————————————————
 # TODO - evaluate and revert if needed
@@ -144,11 +145,12 @@ def build_hnsw_index(embeddings_tensor, image_paths, db_dir):
 
 # Load hnswlib index + metadata
 def load_hnsw_index(db_dir, dim=512):
-    index_path = f"{db_dir}/hnsw_index.bin"
-    metadata_path = f"{db_dir}/hnsw_metadata.pkl"
+    index_path = os.path.abspath(os.path.join(db_dir, "hnsw_index.bin"))
+    metadata_path = os.path.abspath(os.path.join(db_dir, "hnsw_metadata.pkl"))
 
     if not os.path.isfile(index_path):
         return None, None
+
     p = hnswlib.Index(space="cosine", dim=dim)
     p.load_index(index_path)
 
@@ -432,117 +434,335 @@ def decode_response(raw_content):
 
 
 # PDF FUNCTIONS ———————————————————————
-def draw_wrapped_text(c, text, x, y, max_width, font_size=12, leading=14):
-    c.setFont("DejaVu", font_size)
-    lines = textwrap.wrap(text, width=int(max_width / (font_size * 0.45)))
-    for line in lines:
-        c.drawString(x, y, line)
-        y -= leading
-    return y
+def safe_text(text):
+    """Обеспечивает корректное отображение текста"""
+    if isinstance(text, str):
+        return text
+    elif isinstance(text, bytes):
+        return text.decode("utf-8")
+    return str(text)
 
 
-# TODO - make a better pdf
-def prepare_pdf(parsed_data, output_pdf="wedding_scenario_reportlab.pdf"):
-    # === Register font with Cyrillic support ===
-    pdfmetrics.registerFont(TTFont("DejaVu", "DejaVuSansCondensed.ttf"))
+def format_timestamp(seconds):
+    """Форматирует время из секунд в чч:мм:сс"""
+    seconds = int(seconds)
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    seconds = seconds % 60
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
-    # === Setup PDF ===
+
+def draw_wrapped_text(
+    c,
+    text,
+    x,
+    y,
+    max_width,
+    font_name="DejaVu",
+    font_size=12,
+    leading=14,
+    color=colors.black,
+):
+    """Рисует текст с переносом строк"""
+    text = safe_text(text)
+    text_object = c.beginText(x, y)
+    text_object.setFont(font_name, font_size)
+    text_object.setLeading(leading)
+    text_object.setFillColor(color)
+
+    words = text.split()
+    line = []
+    line_count = 0
+
+    for word in words:
+        test_line = " ".join(line + [word]) + " "
+        if c.stringWidth(test_line, font_name, font_size) <= max_width:
+            line.append(word)
+        else:
+            text_object.textLine(" ".join(line))
+            line = [word]
+            line_count += 1
+    if line:
+        text_object.textLine(" ".join(line))
+        line_count += 1
+
+    c.drawText(text_object)
+    return y - (line_count * leading)
+
+
+def add_scene_table(c, scene_data, x, y, width, height, font_name="DejaVu"):
+    """Создаёт компактную таблицу для сцены с прозрачным фоном"""
+    description = safe_text(scene_data["description"])
+    justification = safe_text(scene_data["justification"])
+    file_info = safe_text(scene_data["video_filename"])
+    time_formatted = format_timestamp(scene_data["timestamp"])
+
+    # Разбиваем обоснование на строки
+    justification_lines = []
+    current_line = []
+    max_line_width = width * 0.65
+    font_size = 8  # Уменьшенный размер шрифта для таблицы
+
+    for word in justification.split():
+        test_line = " ".join(current_line + [word])
+        if c.stringWidth(test_line, font_name, font_size) <= max_line_width:
+            current_line.append(word)
+        else:
+            justification_lines.append(" ".join(current_line))
+            current_line = [word]
+    if current_line:
+        justification_lines.append(" ".join(current_line))
+
+    data = [["Описание", description]]
+    data.append(["Обоснование", justification_lines[0]])
+    for line in justification_lines[1:]:
+        data.append(["", line])
+    data.extend([["Файл", file_info], ["Таймкод", time_formatted]])
+
+    table = Table(data, colWidths=[width * 0.3, width * 0.7], repeatRows=1)
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F5F5F5")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#333333")),
+                ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+                ("FONTNAME", (0, 0), (-1, -1), font_name),
+                ("FONTSIZE", (0, 0), (-1, 0), 9),
+                ("FONTSIZE", (0, 1), (-1, -1), 8),
+                ("BOTTOMPADDING", (0, 0), (-1, 0), 4),
+                ("TOPPADDING", (0, 0), (-1, 0), 4),
+                ("BACKGROUND", (0, 1), (-1, -1), None),  # Прозрачный фон
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.lightgrey),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ]
+        )
+    )
+    if len(justification_lines) > 1:
+        table.setStyle(TableStyle([("SPAN", (0, 1), (0, len(justification_lines)))]))
+    table.wrapOn(c, width, height)
+    table.drawOn(c, x, y - table._height)
+    return y - table._height - 0.3 * cm
+
+
+def draw_background(c, width, height, bg_path):
+    """Рисует фоновое изображение на всю страницу"""
+    try:
+        bg = ImageReader(bg_path)
+        c.drawImage(
+            bg,
+            0,
+            0,
+            width=width,
+            height=height,
+            preserveAspectRatio=False,
+            mask="auto",
+        )
+    except Exception as e:
+        print(f"⚠️ Ошибка загрузки фона: {str(e)}")
+
+
+def draw_logo(c, width, margin, y, logo_path):
+    """Добавляет логотип в верхнюю часть документа"""
+    try:
+        logo = ImageReader(logo_path)
+        logo_width = 4 * cm  # Средний размер логотипа
+        logo_height = logo_width * 0.5  # Сохраняем пропорции
+
+        # Позиционируем логотип по центру
+        x = (width - logo_width) / 2
+        c.drawImage(
+            logo,
+            x,
+            y - logo_height,
+            width=logo_width,
+            height=logo_height,
+            mask="auto",
+        )
+        return logo_height + 0.5 * cm  # Возвращаем высоту логотипа + отступ
+    except Exception as e:
+        print(f"⚠️ Ошибка загрузки логотипа: {str(e)}")
+        return 0
+    return 0
+
+
+def prepare_pdf(content_data, files_dir, output_pdf="wedding_scenario_reportlab.pdf"):
+    # Настройка шрифтов
+    try:
+        pdfmetrics.registerFont(TTFont("DejaVu", f"{files_dir}/DejaVuSans.ttf"))
+        pdfmetrics.registerFont(
+            TTFont("DejaVu-Bold", f"{files_dir}/DejaVuSans-Bold.ttf")
+        )
+        main_font = "DejaVu"
+        bold_font = "DejaVu-Bold"
+    except Exception:
+        pdfmetrics.registerFont(TTFont("ArialUnicode", "arial.ttf"))
+        main_font = bold_font = "ArialUnicode"
+
+    # Создание PDF
     c = canvas.Canvas(output_pdf, pagesize=A4)
-    c.setFont("DejaVu", 14)
     width, height = A4
-    margin = 2 * cm
+    margin = 1.5 * cm
+    bottom_margin = 2 * cm  # Увеличенный нижний отступ
     y = height - margin
     max_width = width - 2 * margin
 
-    # === Title ===
-    c.setFont("DejaVu", 18)
-    c.drawCentredString(width / 2, y, "Предложенный порядок сцен и обоснование")
-    y -= 2 * cm
+    # Фон на всю страницу
+    bg_path = f"{files_dir}/background.jpeg"
+    draw_background(c, width, height, bg_path)
 
-    # === Draw scenes ===
-    for i, scene in enumerate(parsed_data["scenes"], 1):
-        description = scene["description"]
-        justification = scene["justification"]
-        image_path = scene["image_path"]
-        video_filename = scene["video_filename"]
-        timestamp = scene["timestamp"]
+    # === Первая страница ===
+    # Добавляем логотип
+    logo_file = f"{files_dir}/logo.jpg"
+    logo_height = draw_logo(c, width, margin, y, logo_file)
+    y -= logo_height + 0.5 * cm  # Отступ после логотипа
 
-        c.setFont("DejaVu", 14)
+    # Стили текста
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "TitleStyle",
+        parent=styles["Title"],
+        fontName=bold_font,
+        fontSize=16,
+        textColor=colors.HexColor("#2c3e50"),
+        spaceAfter=10,
+    )
+
+    # Блок: Общая логика сценария
+    title = Paragraph("Сценарий", title_style)
+    title.wrapOn(c, max_width, height)
+    title.drawOn(c, margin, y)
+    y -= title.height + 0.3 * cm
+
+    logic_style = ParagraphStyle(
+        "LogicStyle",
+        parent=styles["BodyText"],
+        fontName=main_font,
+        fontSize=10,
+        textColor=colors.HexColor("#34495e"),
+        leading=14,
+        spaceBefore=5,
+        spaceAfter=10,
+    )
+    logic_text = Paragraph(safe_text(content_data["overall_logic"]), logic_style)
+    logic_text.wrapOn(c, max_width, height)
+    logic_text.drawOn(c, margin, y - logic_text.height)
+    y -= logic_text.height + 1 * cm
+
+    # Разделитель
+    c.setStrokeColor(colors.HexColor("#7f8c8d"))
+    c.setLineWidth(1)
+    c.line(margin, y, width - margin, y)
+    y -= 1 * cm
+
+    # Заголовок "Сцены свадебного видео" только на первой странице
+    scenes_title = Paragraph(
+        "Рекомендованный порядок сцен для монтажа видео", title_style
+    )
+    scenes_title.wrapOn(c, max_width, height)
+    scenes_title.drawOn(c, margin, y)
+    y -= scenes_title.height + 0.5 * cm
+
+    # === Обработка сцен ===
+    scenes_per_page = [2]  # На первой странице 2 сцены
+    scenes_per_page.extend(
+        [3] * ((len(content_data["scenes"]) - 2 + 2) // 3)
+    )  # На остальных по 3
+
+    current_page = 0
+    scenes_on_current_page = 0
+
+    for i, scene in enumerate(content_data["scenes"], 1):
+        # Проверяем, нужно ли начинать новую страницу
+        if scenes_on_current_page >= scenes_per_page[current_page]:
+            c.showPage()
+            current_page += 1
+            scenes_on_current_page = 0
+            y = height - margin
+            draw_background(c, width, height, bg_path)
+
+        # Заголовок сцены
+        c.setFont(bold_font, 12)
+        c.setFillColor(colors.HexColor("#16a085"))
         y = draw_wrapped_text(
             c,
-            f"Сцена {i}: {description}",
+            f"Сцена #{i}",
             margin,
             y,
             max_width=max_width,
-            font_size=13,
-            leading=15,
+            font_name=bold_font,
+            font_size=12,
+            leading=14,
+            color=colors.HexColor("#16a085"),
         )
-        y = draw_wrapped_text(
-            c,
-            f"Обоснование: {justification}",
-            margin,
-            y - 5,
-            max_width=max_width,
-            font_size=11,
-            leading=13,
-        )
-        y = draw_wrapped_text(
-            c,
-            f"Данные файла: {image_path}, {video_filename}, {timestamp}",
-            margin,
-            y - 5,
-            max_width=max_width,
-            font_size=11,
-            leading=13,
-        )
+        y -= 0.3 * cm
 
-        # Insert image if available
-        if os.path.isfile(image_path):
+        # Вставка изображения
+        if os.path.isfile(scene["image_path"]):
             try:
-                img = ImageReader(image_path)
+                img = ImageReader(scene["image_path"])
                 iw, ih = img.getSize()
                 aspect = ih / iw
-                img_width = (width - 2 * margin) / 2
-                img_height = (img_width * aspect) / 2
-                if y - img_height < margin:
-                    c.showPage()
-                    c.setFont("DejaVu", 14)
-                    y = height - margin
+                img_width = min(max_width, 5 * cm)  # Фиксированная ширина изображения
+                img_height = img_width * aspect
+
+                # Ограничиваем максимальную высоту изображения
+                max_img_height = 3 * cm
+                if img_height > max_img_height:
+                    img_height = max_img_height
+                    img_width = img_height / aspect
+
                 c.drawImage(
-                    img, margin, y - img_height, width=img_width, height=img_height
+                    img,
+                    margin,
+                    y - img_height,
+                    width=img_width,
+                    height=img_height,
+                    mask="auto",
                 )
-                y -= img_height + 1 * cm
+
+                # Подпись к изображению
+                c.setFont(main_font, 7)
+                c.setFillColor(colors.HexColor("#7f8c8d"))
+                c.drawString(
+                    margin,
+                    y - img_height - 0.4 * cm,
+                    f"Кадр из видео: {safe_text(scene['video_filename'])} (time code:{format_timestamp(scene['timestamp'])})",
+                )
+                y -= img_height + 0.6 * cm
             except Exception as e:
                 y = draw_wrapped_text(
                     c,
-                    f"[Image failed to load: {e}]",
+                    f"[Ошибка загрузки изображения: {str(e)}]",
                     margin,
                     y - 10,
                     max_width=max_width,
+                    color=colors.red,
                 )
         else:
             y = draw_wrapped_text(
-                c, "[⚠️ Изображение не найдено]", margin, y - 10, max_width=max_width
+                c,
+                "[⚠️ Изображение не найдено]",
+                margin,
+                y - 10,
+                max_width=max_width,
+                color=colors.red,
             )
 
-        if y < 5 * cm:
-            c.showPage()
-            c.setFont("DejaVu", 14)
-            y = height - margin
+        # Таблица с информацией о сцене
+        y = add_scene_table(c, scene, margin, y, max_width, height, main_font)
 
-    # === Draw overall logic at the end ===
-    c.showPage()
-    y = height - margin
-    c.setFont("DejaVu", 16)
-    c.drawCentredString(width / 2, y, "🎬 Общая логика сценария")
-    y -= 2 * cm
-    y = draw_wrapped_text(
-        c,
-        parsed_data["overall_logic"],
-        margin,
-        y,
-        max_width=max_width,
-        font_size=12,
-        leading=15,
-    )
+        # Отступ между сценами
+        if scenes_on_current_page < scenes_per_page[current_page] - 1:
+            c.setStrokeColor(colors.HexColor("#7f8c8d"))
+            c.setLineWidth(1)
+            c.line(margin, y, width - margin, y)
+            y -= 0.5 * cm
+
+        scenes_on_current_page += 1
+
+    # Подпись внизу последней страницы
+    c.setFont(main_font, 7)
+    c.setFillColor(colors.HexColor("#7f8c8d"))
+    c.drawRightString(width - margin, bottom_margin - 0.5 * cm, "• Generated by wheNN")
+
     return c
