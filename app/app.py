@@ -242,16 +242,10 @@ def log_search_query(query: str):
         writer.writerow([timestamp, query])
 
 
-spinner = (
-    ui.spinner(size="lg", color="primary").props('thickness="4"').classes("q-ma-md")
-)
-spinner.visible = False
-
-
 async def handle_generate_scene_captions():
     spinner.visible = True
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=240) as client:
             response = await client.get(f"{API_URL}/generate_scene_captions")
             response.raise_for_status()
             ui.notify("Сцены успешно сгенерированы!", type="positive")
@@ -262,8 +256,9 @@ async def handle_generate_scene_captions():
 
 
 async def generate_pdf_report():
+    spinner.visible = True
     try:
-        async with httpx.AsyncClient(timeout=120) as client:
+        async with httpx.AsyncClient(timeout=240) as client:
             response = await client.post(
                 f"{API_URL}/generate_pdf_report",
                 json={
@@ -278,11 +273,12 @@ async def generate_pdf_report():
         with open(pdf_path, "wb") as f:
             f.write(response.content)
 
-        ui.notify(f"PDF отчет сохранен как {pdf_path}", type="positive")
+        ui.notify("PDF отчет доступен для просмотра!", type="positive")
         open_pdf_button.visible = True
-
     except Exception as e:
-        ui.notify(f"Ошибка: {str(e)}", type="negative")
+        ui.notify(f"Ошибка: {str(e)}. Попробуйте еще раз.", type="negative")
+    finally:
+        spinner.visible = False
 
 
 video_dialog = ui.dialog()
@@ -513,12 +509,15 @@ with ui.header().classes("bg-secondary flex justify-between items-center px-4"):
             query_tab = ui.tab("Поиск по видео", icon="search")
             report_tab = ui.tab("Отчет", icon="description")
 
-        ui.button("Сгенерировать сцены", on_click=handle_generate_scene_captions)
-        ui.element("div").classes("q-mt-md")  # spacing below
-        spinner  # disp
-
     # RIGHT SECTION
     with ui.row().classes("items-center gap-4"):
+        spinner = (
+            ui.spinner(size="lg", color="white")
+            .props('thickness="4"')
+            .classes("q-ma-md")
+        )
+        spinner.visible = False
+        spinner
         ui.switch("").props(
             "dark=true checked-icon=dark_mode unchecked-icon=light_mode"
         ).bind_value(ui.dark_mode()).classes("text-white")
@@ -662,7 +661,12 @@ with ui.tab_panels(tabs, value=query_tab).classes("w-full rounded-lg shadow-md")
     marker_color_picker.bind_visibility_from(state, "resolve_controller_enabled")
 
     with ui.tab_panel(report_tab):
-        ui.label("Генерация отчета").classes("text-lg mb-4")
+        ui.button(
+            "Сгенерировать сцены",
+            on_click=handle_generate_scene_captions,
+            icon="subtitles",
+        ).classes("w-full").props("text-color=white rounded")
+
         ui.button(
             "Создать PDF", on_click=generate_pdf_report, icon="picture_as_pdf"
         ).classes("w-full").props("text-color=white rounded")
@@ -670,7 +674,7 @@ with ui.tab_panels(tabs, value=query_tab).classes("w-full rounded-lg shadow-md")
         open_pdf_button = (
             ui.button("Открыть отчет", on_click=open_pdf, icon="open_in_new")
             .classes("w-full mt-4")
-            .props("text-color=white rounded")
+            .props("color=green text-color=white rounded")
         )
         open_pdf_button.visible = False
 

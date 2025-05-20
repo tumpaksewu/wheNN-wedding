@@ -19,7 +19,9 @@
 app.log
 
 # Ignore testing files
-/reports
+/reports/*
+!/reports/lib/
+/reports/lib/*
 /build
 /dist
 /db
