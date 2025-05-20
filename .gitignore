@@ -2,7 +2,7 @@
 *.mp4
 
 # Ignore working directories
-/videos/frames/
+/videos
 /db/
 /temp/
 /uploads/
@@ -19,5 +19,14 @@
 app.log
 
 # Ignore testing files
-/reports/*.pdf
+/reports
+/build
+/dist
+/db
+/app/build
+/app/dist
+/app/*.spec
 tests.ipynb
+.nicegui
+
+*.spec

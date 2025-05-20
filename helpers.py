@@ -90,14 +90,12 @@ def get_text_embedding(text, device, clip_model, processor):
 # VECTOR-DB FUNCTIONS ———————————————————————
 # Build hnswlib index + store metadata
 # TODO - clean up path logic
-def build_hnsw_index(
-    embeddings_tensor,
-    image_paths,
-    index_path="./db/hnsw_index.bin",
-    metadata_path="./db/hnsw_metadata.pkl",
-):
-    if not os.path.exists("./db"):
-        os.makedirs("./db")
+def build_hnsw_index(embeddings_tensor, image_paths, db_dir):
+    index_path = f"{db_dir}/hnsw_index.bin"
+    metadata_path = f"{db_dir}/hnsw_metadata.pkl"
+
+    if not os.path.exists(db_dir):
+        os.makedirs(db_dir)
 
     # Convert to numpy array
     embeddings = embeddings_tensor.numpy().astype(np.float32)
@@ -145,9 +143,10 @@ def build_hnsw_index(
 
 
 # Load hnswlib index + metadata
-def load_hnsw_index(
-    index_path="./db/hnsw_index.bin", metadata_path="./db/hnsw_metadata.pkl", dim=512
-):
+def load_hnsw_index(db_dir, dim=512):
+    index_path = f"{db_dir}/hnsw_index.bin"
+    metadata_path = f"{db_dir}/hnsw_metadata.pkl"
+
     if not os.path.isfile(index_path):
         return None, None
     p = hnswlib.Index(space="cosine", dim=dim)
@@ -291,8 +290,11 @@ def describe_image(image_path, device, blip_model, blip_processor):
     return caption
 
 
-def build_captions_csv(centroid_images, metadata, device, blip_model, blip_processor):
-    csv_output_path = Path("./reports/scene_captions.csv")
+def build_captions_csv(
+    centroid_images, metadata, device, blip_model, blip_processor, csv_output_dir
+):
+    os.makedirs(csv_output_dir, exist_ok=True)
+    csv_output_path = f"{csv_output_dir}/scene_captions.csv"
     with open(csv_output_path, mode="w", newline="", encoding="utf-8") as csvfile:
         fieldnames = [
             "cluster_id",
@@ -324,6 +326,7 @@ def build_captions_csv(centroid_images, metadata, device, blip_model, blip_proce
     return True
 
 
+# TODO - provide error if csv_input_path doesn't exist
 def read_captions_csv(csv_input_path):
     centroid_captions = []
     with open(csv_input_path, mode="r", newline="", encoding="utf-8") as csvfile:
@@ -342,7 +345,9 @@ def read_captions_csv(csv_input_path):
 
 
 # LLM FUNCTIONS ———————————————————————
-def request_scenarios(centroid_captions, api_key, model, prompt=None):
+def request_scenarios(
+    centroid_captions, api_key, model, prompt=None, response_log_dir=None
+):
     scenes = [
         {
             "description": item["caption"].strip("\n"),
@@ -352,7 +357,7 @@ def request_scenarios(centroid_captions, api_key, model, prompt=None):
         }
         for item in centroid_captions
     ]
-    # TODO - improve prompt (e.g. generate at least 10 scenes if user passed >15)
+
     if not prompt:
         prompt = f"""
         Ты опытный видеомонтажёр, специализирующийся на свадебных видео.  
@@ -375,7 +380,7 @@ def request_scenarios(centroid_captions, api_key, model, prompt=None):
             "justification": "обоснование",
             "image_path": "путь_к_изображению",
             "video_filename": "название_видеофайла",
-            "timestamp": "временной_код",
+            "timestamp": "временной_код"
             }},
         ],
         "overall_logic": "Общая логика сценария"
@@ -394,6 +399,19 @@ def request_scenarios(centroid_captions, api_key, model, prompt=None):
             }
         ),
     )
+
+    if response_log_dir:
+        os.makedirs(response_log_dir, exist_ok=True)
+        try:
+            response_json = response.json()
+        except Exception as e:
+            response_json = {
+                "error": f"Failed to decode JSON: {str(e)}",
+                "raw_text": response.text,
+            }
+        with open(f"{response_log_dir}/llm_response.json", "w", encoding="utf-8") as f:
+            json.dump(response_json, f, ensure_ascii=False, indent=2)
+
     return response
 
 

@@ -1,4 +1,4 @@
-from nicegui import ui
+from nicegui import run, ui
 import httpx
 import json
 import csv
@@ -11,6 +11,13 @@ from datetime import timedelta, datetime
 from typing import Optional
 import tkinter as tk
 from tkinter import filedialog
+
+# macOS packaging support
+from multiprocessing import freeze_support  # noqa
+
+freeze_support()  # noqa
+
+from picker import select_folder
 
 
 def get_local_ip():
@@ -102,20 +109,29 @@ def load_settings_from_file():
             ui.notify(f"Could not load settings: {e}", type="warning")
 
 
-def select_folder():
-    root = tk.Tk()
-    root.withdraw()
-    root.wm_attributes("-topmost", 1)
-
-    try:
-        folder = filedialog.askdirectory(title="Выберите папку с видео")
-        if folder:
-            state.show_mount_button = True
-            state.video_dir = folder
-            video_dir_input.value = folder
-            ui.notify(f"Выбрана папка: {folder}", type="positive")
-    except Exception as e:
+async def handle_folder_click():
+    result, e = await run.cpu_bound(select_folder)
+    if result:
+        state.show_mount_button = True
+        state.video_dir = result
+        video_dir_input.value = result
+        ui.notify(f"Выбрана папка: {result}", type="positive")
+    else:
         ui.notify(f"Ошибка при выборе папки: {str(e)}", type="negative")
+
+
+# def select_folder():
+#     e = None
+#     root = tk.Tk()
+#     root.withdraw()
+#     root.wm_attributes("-topmost", 1)
+
+#     try:
+#         folder = filedialog.askdirectory(title="Выберите папку с видео")
+#         if folder:
+#             return folder, e
+#     except Exception as e:
+#         return None, e
 
 
 async def mount_and_list():
@@ -224,6 +240,25 @@ def log_search_query(query: str):
         if not file_exists:
             writer.writerow(["timestamp", "query"])
         writer.writerow([timestamp, query])
+
+
+spinner = (
+    ui.spinner(size="lg", color="primary").props('thickness="4"').classes("q-ma-md")
+)
+spinner.visible = False
+
+
+async def handle_generate_scene_captions():
+    spinner.visible = True
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.get(f"{API_URL}/generate_scene_captions")
+            response.raise_for_status()
+            ui.notify("Сцены успешно сгенерированы!", type="positive")
+    except Exception as e:
+        ui.notify(f"Ошибка: {str(e)}", type="negative")
+    finally:
+        spinner.visible = False
 
 
 async def generate_pdf_report():
@@ -478,6 +513,10 @@ with ui.header().classes("bg-secondary flex justify-between items-center px-4"):
             query_tab = ui.tab("Поиск по видео", icon="search")
             report_tab = ui.tab("Отчет", icon="description")
 
+        ui.button("Сгенерировать сцены", on_click=handle_generate_scene_captions)
+        ui.element("div").classes("q-mt-md")  # spacing below
+        spinner  # disp
+
     # RIGHT SECTION
     with ui.row().classes("items-center gap-4"):
         ui.switch("").props(
@@ -492,6 +531,7 @@ with ui.header().classes("bg-secondary flex justify-between items-center px-4"):
         ui.button(on_click=lambda: history_helper(), icon="history").props(
             "outline round color=slate-20"
         )
+
 
 with ui.left_drawer().classes("p-4 w-64 shadow-lg") as settings_drawer:
     ui.label("⚙️ Настройки").classes("text-xl font-bold mb-4")
@@ -510,7 +550,7 @@ with ui.left_drawer().classes("p-4 w-64 shadow-lg") as settings_drawer:
             .bind_value_to(state, "video_dir")
             .classes("flex-grow")
         )
-        ui.button(icon="folder", on_click=select_folder).props(
+        ui.button(icon="folder", on_click=handle_folder_click).props(
             "text-color=white rounded"
         )
         mount_button = (

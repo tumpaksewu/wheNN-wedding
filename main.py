@@ -1,16 +1,16 @@
 import torch
 import os
+import sys
 import shutil
 import logging
-import json
+import uvicorn
 import numpy as np
 from fastapi import FastAPI, UploadFile, Form, HTTPException
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from typing import List, Generator
+from typing import Generator
 from pathlib import Path
-from tqdm import tqdm
 from transformers import (
     CLIPProcessor,
     CLIPModel,
@@ -37,11 +37,23 @@ from helpers import (
     load_hnsw_index,
 )
 
+# macOS packaging support
+from multiprocessing import freeze_support  # noqa
+
+freeze_support()  # noqa
+
 # TODO - make the app clean up the frames folder (maybe something else?) when exiting
 # TODO - load hnsw index and metadata at startup safely, otherwise set to None
 
+
+def resource_path(relative_path):
+    """Get absolute path to resource, works for dev and for PyInstaller bundle"""
+    base_path = getattr(sys, "_MEIPASS", os.path.abspath("."))
+    return os.path.join(base_path, relative_path)
+
+
 # Logging ——————————————————————————————————————————————
-log_file = "app.log"
+log_file = resource_path("app.log")
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -59,29 +71,29 @@ if shutil.which("ffmpeg") is None:
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 logger.info(f"Using device: {device}")
 
-# OPENROUTER_API_KEY = (
-#     "Bearer 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"
-# )
-# DEFAULT_OPENROUTER_MODEL = "qwen/qwen3-30b-a3b:free"
-
-# TODO - allow user to set their own input video dir
-REPORT_DIR = "./reports"
+REPORT_DIR = resource_path("./reports")
+DB_DIR = resource_path("./db")
 
 SERVER_VIDEO_DIR = "http://0.0.0.0:8000/videos"
 SERVER_FRAMES_DIR = "http://0.0.0.0:8000/frames"
 
+logger.info("Loading CLIP model...")
 clip_model = CLIPModel.from_pretrained("laion/CLIP-ViT-B-32-laion2B-s34B-b79K").to(
     device
 )
-clip_model = PeftModel.from_pretrained(clip_model, "./models/LoRA_wedding")
+clip_model = PeftModel.from_pretrained(clip_model, resource_path("models/LoRA_wedding"))
 processor = CLIPProcessor.from_pretrained("laion/CLIP-ViT-B-32-laion2B-s34B-b79K")
 
+logger.info("Loading translation model...")
 tokenizer = AutoTokenizer.from_pretrained("Helsinki-NLP/opus-mt-ru-en")
 tr_model = (
     AutoModelForSeq2SeqLM.from_pretrained("Helsinki-NLP/opus-mt-ru-en")
     .to(device)
     .eval()
 )
+
+# FIXME
+logger.info("Loading BLIP2 model...")
 
 blip_processor = Blip2Processor.from_pretrained("Salesforce/blip2-opt-2.7b")
 blip_model = Blip2ForConditionalGeneration.from_pretrained(
@@ -116,23 +128,33 @@ class OpenrouterRequest(BaseModel):
     openrouter_model: str = "qwen/qwen3-30b-a3b:free"
 
 
-# Helper function to mount server folders
 def mount_folders(video_folder_path):
-    # Mount main video path
+    global mounted
+
+    video_folder_path = Path(video_folder_path).resolve()
+    frames_path = (video_folder_path / "frames").resolve()
+
+    resolved_video_path = None
+
     if not mounted["videos"]:
+        resolved_video_path = video_folder_path
         app.mount(
-            "/videos", StaticFiles(directory=str(video_folder_path)), name="videos"
+            "/videos", StaticFiles(directory=str(resolved_video_path)), name="videos"
         )
         mounted["videos"] = True
+    else:
+        resolved_video_path = Path(
+            app.state.VIDEO_DIR
+        )  # Or reuse existing one from app.state
 
-    # Mount frames subfolder if it exists
-    frames_path = video_folder_path / "frames"
     if not mounted["frames"]:
-        if not os.path.exists(frames_path):
-            os.makedirs(frames_path)
+        frames_path = (video_folder_path / "frames").resolve()
+        if not frames_path.exists():
+            frames_path.mkdir(parents=True, exist_ok=True)
         app.mount("/frames", StaticFiles(directory=str(frames_path)), name="frames")
         mounted["frames"] = True
-    return video_folder_path, frames_path
+
+    return resolved_video_path, frames_path
 
 
 # Helper function for SSE-enhanced /extract_frames_and_embeddings endpoint
@@ -166,7 +188,7 @@ def event_stream() -> Generator[str, None, None]:
     logger.info(msg)
     yield f"data: {msg}\n\n"
 
-    _, m = build_hnsw_index(image_embeddings, image_paths)
+    _, m = build_hnsw_index(image_embeddings, image_paths, db_dir=DB_DIR)
     msg = f"Built hnsw index and metadata file with {len(m)} entries!"
     logger.info(msg)
     yield f"data: {msg}\n\n"
@@ -221,7 +243,7 @@ def mount_and_list_videos(data: FolderRequest):
 def query_similar_images(req: QueryRequest):
     mount_folders(app.state.VIDEO_DIR)
 
-    hnsw_index, metadata = load_hnsw_index()
+    hnsw_index, metadata = load_hnsw_index(db_dir=DB_DIR)
     if hnsw_index is None or metadata is None:
         return JSONResponse(content={"error": "Images not loaded yet"}, status_code=400)
 
@@ -259,7 +281,7 @@ def query_similar_images(req: QueryRequest):
 
 @app.get("/generate_scene_captions")
 def generate_scene_captions():
-    hnsw_index, metadata = load_hnsw_index()
+    hnsw_index, metadata = load_hnsw_index(db_dir=DB_DIR)
     if hnsw_index is None or metadata is None:
         return JSONResponse(content={"error": "Images not loaded yet"}, status_code=400)
 
@@ -293,7 +315,12 @@ def generate_scene_captions():
     # Step 4: Generate captions using BLIP2
     logger.info("Generating captions...")
     build_csv = build_captions_csv(
-        centroid_images, metadata, device, blip_model, blip_processor
+        centroid_images,
+        metadata,
+        device,
+        blip_model,
+        blip_processor,
+        csv_output_dir=REPORT_DIR,
     )
     if build_csv:
         logger.info(f"Captions saved to {REPORT_DIR}/scene_captions.csv.")
@@ -320,7 +347,9 @@ def generate_pdf_report(req: OpenrouterRequest):
 
     # Query LLM with structured input
     logger.info("Requesting LLM scenarios...")
-    llm_response = request_scenarios(centroid_captions, api_key=api_key, model=model)
+    llm_response = request_scenarios(
+        centroid_captions, api_key=api_key, model=model, response_log_dir=REPORT_DIR
+    )
     raw_content = llm_response.json()["choices"][0]["message"]["content"]
     llm_data = decode_response(raw_content)
 
@@ -338,3 +367,7 @@ def generate_pdf_report(req: OpenrouterRequest):
     return FileResponse(
         output_pdf, media_type="application/pdf", filename="scenario_report.pdf"
     )
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
