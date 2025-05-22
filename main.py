@@ -2,6 +2,7 @@ import torch
 import gc
 import os
 import sys
+import json
 import shutil
 import logging
 import uvicorn
@@ -21,6 +22,7 @@ from transformers import (
     Blip2ForConditionalGeneration,
 )
 from peft import PeftModel
+import faiss
 
 from helpers import (
     get_image_embeddings,
@@ -36,6 +38,13 @@ from helpers import (
     prepare_pdf,
     build_hnsw_index,
     load_hnsw_index,
+    run_whisper,
+    load_segments,
+    build_documents,
+    embed_and_save_index,
+    load_index,
+    semantic_search,
+    search_by_topic,
 )
 
 # macOS packaging support
@@ -90,11 +99,10 @@ tr_model = (
     .eval()
 )
 
-# FIXME
-
 
 # GLOBAL STATE
 image_paths, image_embeddings = [], None
+whisper_store = None
 
 # FastAPI App ———————————————————————————————————————————
 app = FastAPI()
@@ -119,6 +127,19 @@ class OpenrouterRequest(BaseModel):
         "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"
     )
     openrouter_model: str = "qwen/qwen3-30b-a3b:free"
+
+
+class WhisperRequest(BaseModel):
+    model: str = "base"
+    batch_size: int = 12
+
+
+class WhisperSearchRequest(BaseModel):
+    query: str
+
+
+class WhisperTopicRequest(BaseModel):
+    topic: str
 
 
 def mount_folders(video_folder_path):
@@ -163,12 +184,12 @@ def event_stream() -> Generator[str, None, None]:
             logger.info(msg)
             yield f"data: {msg}\n\n"
 
-            for line in extract_frames(video_path, app.state.FRAMES_DIR):
+            for line in extract_frames(video_path, app.state.VIDEO_DIR):
                 yield f"data: {line}\n\n"
         else:
-            warn = f"Skipping non-video file: {video_file}"
-            logger.warning(warn)
-            yield f"data: {warn}\n\n"
+            msg = f"Skipping non-video file: {video_file}"
+            logger.info(msg)
+            yield f"data: {msg}\n\n"
 
     yield "data: Extracting image embeddings...\n\n"
 
@@ -383,6 +404,58 @@ def generate_pdf_report(req: OpenrouterRequest):
     return FileResponse(
         output_pdf, media_type="application/pdf", filename="scenario_report.pdf"
     )
+
+
+@app.post("/run_whisper")
+def analyze_with_whisper(req: WhisperRequest):
+    segments = []
+    for audio_file in os.listdir(app.state.VIDEO_DIR):
+        if audio_file.endswith(".wav"):
+            audio_path = os.path.join(app.state.VIDEO_DIR, audio_file)
+            file_segments = run_whisper(
+                audio_path, model=req.model, batch_size=req.batch_size
+            )
+            segments.extend(file_segments)
+        else:
+            msg = f"Skipping non-audio file: {audio_file}"
+            logger.info(msg)
+
+    out_path = os.path.join(app.state.VIDEO_DIR, "whisper_transcripts.json")
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(segments, f, ensure_ascii=False, indent=2)
+
+    return segments
+
+
+@app.get("/build_whisper_db")
+def build_whisper_db():
+    global whisper_store
+    transcript_path = Path(app.state.VIDEO_DIR) / "whisper_transcripts.json"
+    if not transcript_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Файл транскрипции не найден! Сначала запустите /run_whisper",
+        )
+
+    segments = load_segments(transcript_path)
+    documents = build_documents(segments)
+    whisper_store = embed_and_save_index(documents, DB_DIR)
+
+
+@app.post("/search_whisper_db")
+def search_whisper_db(req: WhisperSearchRequest):
+    global whisper_store
+    if not whisper_store:
+        whisper_store = load_index(DB_DIR)
+    return semantic_search(req.query, whisper_store)
+
+
+@app.post("/search_whisper_db_by_topic")
+def search_whisper_by_topic(req: WhisperTopicRequest):
+    global whisper_store
+    if not whisper_store:
+        whisper_store = load_index(DB_DIR)
+    return search_by_topic(req.topic, whisper_store)
 
 
 if __name__ == "__main__":

@@ -45,6 +45,7 @@ class AppState:
         self.selected_video: Optional[str] = None
         self.openrouter_user_api_key: str = ""
         self.openrouter_user_model: str = ""
+        self.active_tab = "clip"
         self.query_text: str = ""
         self.query_results = []
         self.progress_message: str = ""
@@ -55,6 +56,11 @@ class AppState:
         self.resolve_controller_enabled = False
         self.resolve_switch_active = False
         self.marker_color = "Red"
+        self.whisper_segments = []
+        self.segments_column = None
+        self.empty_label = None
+        self.search_results = []
+        self.current_search_index = 0
 
 
 state = AppState()
@@ -120,20 +126,6 @@ async def handle_folder_click():
         ui.notify(f"Ошибка при выборе папки: {str(e)}", type="negative")
 
 
-# def select_folder():
-#     e = None
-#     root = tk.Tk()
-#     root.withdraw()
-#     root.wm_attributes("-topmost", 1)
-
-#     try:
-#         folder = filedialog.askdirectory(title="Выберите папку с видео")
-#         if folder:
-#             return folder, e
-#     except Exception as e:
-#         return None, e
-
-
 async def mount_and_list():
     if not state.video_dir:
         ui.notify("Пожалуйста, выберите папку с видео", type="negative")
@@ -152,6 +144,7 @@ async def mount_and_list():
         )
 
         save_settings_to_file()
+        await load_whisper_transcripts()
     except Exception as e:
         ui.notify(f"Ошибка: {str(e)}", type="negative")
 
@@ -197,6 +190,8 @@ async def extract_frames_and_embeddings():
                         progress_area.push(message)
 
         progress_dialog.close()
+
+        await get_whisper_transcripts()
 
     except Exception as e:
         progress_area.push(f"❌ Ошибка: {str(e)}")
@@ -244,11 +239,13 @@ def log_search_query(query: str):
 
 async def handle_generate_scene_captions():
     spinner.visible = True
+    ui.notify("Запускаем генерацию сцен с BLIP2...", type="warning")
     try:
         async with httpx.AsyncClient(timeout=240) as client:
             response = await client.get(f"{API_URL}/generate_scene_captions")
             response.raise_for_status()
             ui.notify("Сцены успешно сгенерированы!", type="positive")
+            create_pdf_button.visible = True
     except Exception as e:
         ui.notify(f"Ошибка: {str(e)}", type="negative")
     finally:
@@ -311,7 +308,7 @@ def create_on_click_mrk_button(video_name, timestamp):
             target_marker_secs=timestamp,
             marker_color=state.marker_color,
             marker_name=state.query_text,
-            marker_note="testttt",
+            marker_note="",
         )
 
         if success:
@@ -492,28 +489,182 @@ def update_k(delta: int):
     state.k = max(1, min(18, state.k + delta))  # clamp between 1 and 18
 
 
+def render_segments(segments: list, highlight_indices: list = None):
+    state.search_results_indices = highlight_indices or []
+    state.current_search_index = 0
+
+    state.segments_column.clear()
+
+    for idx, seg in enumerate(segments):
+        is_match = idx in state.search_results_indices
+        bg_class = "bg-yellow-100 dark:bg-yellow-600" if is_match else ""
+        seg_id = f"seg-{idx}"
+
+        with state.segments_column:
+            with (
+                ui.card()
+                .tight()
+                .classes(f"p-2 {bg_class} rounded-lg")
+                .props(f'flat bordered id="{seg_id}"')
+            ):
+                with ui.row().classes("items-center gap-2"):
+                    ui.element("q-chip").props(
+                        f'clickable outline label="{seg["video_filename"]}: {str(timedelta(seconds=int(seg["start"])))} — {str(timedelta(seconds=int(seg["end"])))}"'
+                    ).classes("text-sm cursor-pointer q-ma-xs").on(
+                        "click",
+                        lambda e, s=seg: show_video_preview(
+                            s["video_filename"], s["start"]
+                        ),
+                    )
+                    ui.button(
+                        "",
+                        icon="push_pin",
+                        on_click=create_on_click_mrk_button(
+                            seg["video_filename"], seg["start"]
+                        ),
+                    ).props("round dense outline").classes(
+                        "hover:bg-black/50"
+                    ).bind_visibility_from(state, "resolve_controller_enabled")
+                ui.label(seg["text"]).classes(
+                    "text-base whitespace-pre-wrap break-words"
+                )
+
+    if state.search_results_indices:
+        jump_to_result(0)
+
+
+async def load_whisper_transcripts():
+    try:
+        # Try loading existing transcript JSON
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(f"{API_URL}/videos/whisper_transcripts.json")
+            response.raise_for_status()
+            state.whisper_segments = response.json()
+            ui.notify(
+                f"Успешно загружены аудио-сегменты: {len(state.whisper_segments)}.",
+                type="positive",
+            )
+    except Exception as _:
+        pass
+
+    render_segments(state.whisper_segments)
+
+
+async def get_whisper_transcripts():
+    ui.notify("Запускаем Whisper...", type="warning")
+    spinner.visible = True
+    try:
+        # Fallback: Run whisper with default payload
+        payload = {"model": "base", "batch_size": 24}
+        async with httpx.AsyncClient(timeout=300) as client:
+            run_response = await client.post(f"{API_URL}/run_whisper", json=payload)
+            run_response.raise_for_status()
+            state.whisper_segments = run_response.json()
+            ui.notify(
+                f"✅ Успешно создали {len(state.whisper_segments)} сегментов с помощью Whisper!",
+                type="positive",
+            )
+
+        # Trigger DB build (fire and forget, short timeout)
+        async with httpx.AsyncClient(timeout=5) as client:
+            try:
+                await client.get(f"{API_URL}/build_whisper_db")
+            except Exception:
+                pass  # we don't care if this fails
+
+    except Exception as fallback_error:
+        ui.notify(
+            f"❌ Не удалось создать транскрипцию: {str(fallback_error)}",
+            type="negative",
+        )
+        return
+    finally:
+        spinner.visible = False
+
+    render_segments(state.whisper_segments)
+
+
+def jump_to_result(index: int):
+    if not state.search_results_indices:
+        return
+
+    index = max(0, min(index, len(state.search_results_indices) - 1))
+    state.current_search_index = index
+    real_idx = state.search_results_indices[index]
+
+    js_code = f"""
+        const el = document.getElementById("seg-{real_idx}");
+        if (el) {{
+            el.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
+            el.classList.add('ring', 'ring-4', 'ring-yellow-300');
+            setTimeout(() => el.classList.remove('ring', 'ring-4', 'ring-yellow-300'), 1000);
+        }}
+    """
+    ui.run_javascript(js_code)
+
+
+def run_topic_search(topic: str):
+    resp = httpx.post(
+        f"{API_URL}/search_whisper_db_by_topic",
+        json={"topic": topic},
+        timeout=40,
+    )
+    if resp.status_code == 200:
+        results = resp.json()
+
+        result_set = {(r["start"], r["end"]) for r in results}
+        match_indices = [
+            idx
+            for idx, seg in enumerate(state.whisper_segments)
+            if (seg["start"], seg["end"]) in result_set
+        ]
+
+        render_segments(state.whisper_segments, highlight_indices=match_indices)
+    else:
+        ui.notify("❌ Ошибка при поиске темы", color="negative")
+
+
+def run_search():
+    query = query_input.value
+    resp = httpx.post(f"{API_URL}/search_whisper_db", json={"query": query}, timeout=40)
+    if resp.status_code == 200:
+        results = resp.json()
+
+        result_set = {(r["start"], r["end"]) for r in results}
+        match_indices = [
+            idx
+            for idx, seg in enumerate(state.whisper_segments)
+            if (seg["start"], seg["end"]) in result_set
+        ]
+
+        render_segments(state.whisper_segments, highlight_indices=match_indices)
+    else:
+        ui.notify("❌ Ошибка при поиске", color="negative")
+
+
 # MAIN UI —————————————————————————————
 load_settings_from_file()
 
 with ui.header().classes("bg-secondary flex justify-between items-center px-4"):
     # LEFT SECTION
     with ui.row().classes("items-center gap-4 flex-nowrap"):
-        ui.button(on_click=lambda: settings_drawer.toggle(), icon="menu").props(
-            "outline rounded color=slate-20"
-        )
+        ui.button(on_click=lambda: settings_drawer.toggle(), icon="menu").classes(
+            "w-20 h-14"
+        ).props("outline rounded color=white")
         with ui.column().classes("leading-none justify-center -space-y-1"):
             ui.label("wheNN [wedding]").classes("text-sm font-bold leading-none")
-            ui.label("> Build 1.4.1").classes("text-xs opacity-70 leading-none")
+            ui.label("> Build 1.4.4").classes("text-xs opacity-70 leading-none")
 
-        with ui.tabs().classes("ml-4") as tabs:
-            query_tab = ui.tab("Поиск по видео", icon="search")
+        with ui.tabs().classes("ml-4").bind_value(state, "active_tab") as tabs:
+            clip_tab = ui.tab("Видео", icon="videocam")
+            whisper_tab = ui.tab("Аудио", icon="record_voice_over")
             report_tab = ui.tab("Отчет", icon="description")
 
     # RIGHT SECTION
     with ui.row().classes("items-center gap-4"):
         spinner = (
             ui.spinner(size="lg", color="white")
-            .props('thickness="4"')
+            .props('thickness="8"')
             .classes("q-ma-md")
         )
         spinner.visible = False
@@ -527,9 +678,6 @@ with ui.header().classes("bg-secondary flex justify-between items-center px-4"):
                 "https://github.com/tumpaksewu/wheNN-wedding"
             ),
         ).props("outline round text-color=white")
-        ui.button(on_click=lambda: history_helper(), icon="history").props(
-            "outline round color=slate-20"
-        )
 
 
 with ui.left_drawer().classes("p-4 w-64 shadow-lg") as settings_drawer:
@@ -601,8 +749,8 @@ with (
     with ui.timeline(side="right") as timeline:
         pass
 
-with ui.tab_panels(tabs, value=query_tab).classes("w-full rounded-lg shadow-md"):
-    with ui.tab_panel(query_tab):
+with ui.tab_panels(tabs, value=clip_tab).classes("w-full rounded-lg shadow-md"):
+    with ui.tab_panel(clip_tab):
         with ui.row().classes("w-full items-center"):
             ui.input("Поисковый запрос").bind_value_to(state, "query_text").classes(
                 "flex-grow h-14"
@@ -626,10 +774,12 @@ with ui.tab_panels(tabs, value=query_tab).classes("w-full rounded-lg shadow-md")
 
                 # Auto-update display when state.k changes
                 ui.timer(0.1, refresh_label)
-
             ui.button(
-                "Искать", on_click=lambda: query_similar_images(state.k), icon="search"
+                "", on_click=lambda: query_similar_images(state.k), icon="search"
             ).classes("ml-2 h-14 px-4 text-lg").props("text-color=white rounded")
+            ui.button(on_click=lambda: history_helper(), icon="history").classes(
+                "ml-2 h-14 px-4 text-lg"
+            ).props("outline round color=slate-20")
 
         results_container = ui.column().classes("w-full mt-4 gap-4")
 
@@ -667,16 +817,88 @@ with ui.tab_panels(tabs, value=query_tab).classes("w-full rounded-lg shadow-md")
             icon="subtitles",
         ).classes("w-full").props("text-color=white rounded")
 
-        ui.button(
-            "Создать PDF", on_click=generate_pdf_report, icon="picture_as_pdf"
-        ).classes("w-full").props("text-color=white rounded")
+        create_pdf_button = (
+            ui.button(
+                "Создать PDF", on_click=generate_pdf_report, icon="picture_as_pdf"
+            )
+            .classes("w-full")
+            .props("text-color=white rounded")
+        )
 
         open_pdf_button = (
             ui.button("Открыть отчет", on_click=open_pdf, icon="open_in_new")
             .classes("w-full mt-4")
             .props("color=green text-color=white rounded")
         )
+
+        create_pdf_button.visible = False
         open_pdf_button.visible = False
+
+    with ui.tab_panel(whisper_tab).classes("w-full h-full"):
+        with ui.row().classes("items-center gap-2 w-full"):
+            query_input = (
+                ui.input(placeholder="Поисковый запрос")
+                .classes("flex-grow h-14")
+                .props("clearable rounded outlined color=grey-7")
+            )
+            topic_fab = (
+                ui.element("q-fab")
+                .props("color=primary icon=local_offer direction=down label='Темы'")
+                .classes("shadow-lg")
+            )
+
+            with topic_fab:
+                ui.element("q-fab-action").props(
+                    "icon=celebration label=Поздравления color=primary"
+                ).on("click", lambda: run_topic_search("toast"))
+                ui.element("q-fab-action").props(
+                    "icon=music_note label=Танец color=primary"
+                ).on("click", lambda: run_topic_search("dance"))
+                ui.element("q-fab-action").props(
+                    "icon=diamond label=Кольца color=primary"
+                ).on("click", lambda: run_topic_search("rings"))
+                ui.element("q-fab-action").props(
+                    "icon=local_florist label=Букет color=primary"
+                ).on("click", lambda: run_topic_search("bouquet_toss"))
+                ui.element("q-fab-action").props(
+                    "icon=record_voice_over label=Клятвы color=primary"
+                ).on("click", lambda: run_topic_search("vows"))
+                ui.element("q-fab-action").props(
+                    "icon=card_giftcard label=Подарки color=primary"
+                ).on("click", lambda: run_topic_search("gift_opening"))
+            ui.button("", on_click=run_search, icon="search").classes(
+                "ml-2 h-14 px-4 text-lg"
+            ).props("text-color=white rounded")
+
+        # Container for segments
+        state.segments_column = ui.column().style(
+            "width: 70vw; "
+            "overflow-y: auto; "  # vertical scroll if content overflows
+            "overflow-x: hidden; "  # prevent horizontal scroll
+            "box-sizing: border-box; "  # include padding/border in width
+            "padding: 10px; "
+        )
+        state.empty_label = ui.label(
+            "Транскрипция Whisper пока не загружена..."
+        ).classes("text-gray-500")
+
+        with ui.card().classes(
+            "fixed right-4 top-1/2 z-50 p-3 scale-110 rounded-3xl shadow-xl backdrop-blur bg-white/30 flex flex-col space-y-3"
+        ):
+            ui.button(
+                "",
+                icon="arrow_upward",
+                on_click=lambda: jump_to_result(state.current_search_index - 1),
+            ).props("round outline color=primary").classes(
+                "dark:!text-white dark:!border-white"
+            )
+            ui.button(
+                "",
+                icon="arrow_downward",
+                on_click=lambda: jump_to_result(state.current_search_index + 1),
+            ).props("round outline color=primary").classes(
+                "dark:!text-white dark:!border-white"
+            )
 
     update_history_drawer()
 

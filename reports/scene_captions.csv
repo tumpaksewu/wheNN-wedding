@@ -1,48 +1,79 @@
 cluster_id,image_path,video_filename,timestamp,caption
-20,/Users/aleko/Documents/elbrus_bootcamp/ds-phase-3/_FINAL_PROJECT/videos/testy/frames/wedding_stream.mp4~928.jpg,wedding_stream.mp4,2784,"a couple is sitting on a balcony with a child
+-1,/Users/aleko/Downloads/test_video_dir/1111/frames/20240815222623.mp4~314.jpg,20240815222623.mp4,942,"people are standing around a man in a suit
 "
--1,/Users/aleko/Documents/elbrus_bootcamp/ds-phase-3/_FINAL_PROJECT/videos/testy/frames/wedding_stream.mp4~1623.jpg,wedding_stream.mp4,4869,"a man is holding up his foot in front of a wedding party
+12,/Users/aleko/Downloads/test_video_dir/1111/frames/20240815135410.mp4~8.jpg,20240815135410.mp4,24,"two people walking down the stairs in a building
 "
-3,/Users/aleko/Documents/elbrus_bootcamp/ds-phase-3/_FINAL_PROJECT/videos/testy/frames/wedding_stream.mp4~196.jpg,wedding_stream.mp4,588,"a man in a suit is walking down a street
+4,/Users/aleko/Downloads/test_video_dir/1111/frames/20240815171409.mp4~36.jpg,20240815171409.mp4,108,"a red and white amusement ride at an amusement park
 "
-10,/Users/aleko/Documents/elbrus_bootcamp/ds-phase-3/_FINAL_PROJECT/videos/testy/frames/wedding_stream.mp4~850.jpg,wedding_stream.mp4,2550,"people are standing on a sidewalk with their shoes on
+35,/Users/aleko/Downloads/test_video_dir/1111/frames/20240815222623.mp4~70.jpg,20240815222623.mp4,210,"two women in white dresses are dancing at a party
 "
-15,/Users/aleko/Documents/elbrus_bootcamp/ds-phase-3/_FINAL_PROJECT/videos/testy/frames/wedding_stream.mp4~569.jpg,wedding_stream.mp4,1707,"a man in a white shirt is standing next to a man in a suit
+30,/Users/aleko/Downloads/test_video_dir/1111/frames/20240815222623.mp4~274.jpg,20240815222623.mp4,822,"a man and woman are standing next to each other
 "
-13,/Users/aleko/Documents/elbrus_bootcamp/ds-phase-3/_FINAL_PROJECT/videos/testy/frames/wedding_stream.mp4~1191.jpg,wedding_stream.mp4,3573,"a man and woman are getting married in front of a crowd
+13,/Users/aleko/Downloads/test_video_dir/1111/frames/20240816153112.mp4~2.jpg,20240816153112.mp4,6,"a group of people standing around a table with bottles of wine
 "
-5,/Users/aleko/Documents/elbrus_bootcamp/ds-phase-3/_FINAL_PROJECT/videos/testy/frames/wedding_stream.mp4~1389.jpg,wedding_stream.mp4,4167,"a man is taking a selfie with a camera
+36,/Users/aleko/Downloads/test_video_dir/1111/frames/20240815222329.mp4~20.jpg,20240815222329.mp4,60,"a man in a suit is standing next to a group of women
 "
-22,/Users/aleko/Documents/elbrus_bootcamp/ds-phase-3/_FINAL_PROJECT/videos/testy/frames/wedding_stream.mp4~1328.jpg,wedding_stream.mp4,3984,"a wedding ceremony in front of the water
+7,/Users/aleko/Downloads/test_video_dir/1111/frames/20240815222329.mp4~33.jpg,20240815222329.mp4,99,"a man holding a microphone to a young girl
 "
-19,/Users/aleko/Documents/elbrus_bootcamp/ds-phase-3/_FINAL_PROJECT/videos/testy/frames/wedding_stream.mp4~147.jpg,wedding_stream.mp4,441,"a virtual tour of the wedding ceremony
+9,/Users/aleko/Downloads/test_video_dir/1111/frames/20240721173306.mp4~37.jpg,20240721173306.mp4,111,"a man in a tan coat standing on a balcony
 "
-18,/Users/aleko/Documents/elbrus_bootcamp/ds-phase-3/_FINAL_PROJECT/videos/testy/frames/wedding_stream.mp4~721.jpg,wedding_stream.mp4,2163,"a video of people walking down a path in front of a building
+24,/Users/aleko/Downloads/test_video_dir/1111/frames/20240815222623.mp4~239.jpg,20240815222623.mp4,717,"a group of people sitting around a table with food
 "
-21,/Users/aleko/Documents/elbrus_bootcamp/ds-phase-3/_FINAL_PROJECT/videos/testy/frames/wedding_stream.mp4~372.jpg,wedding_stream.mp4,1116,"a wedding ceremony is taking place in a virtual reality
+5,/Users/aleko/Downloads/test_video_dir/1111/frames/20240816153501.mp4~14.jpg,20240816153501.mp4,42,"a path through a forest of birch trees
 "
-7,/Users/aleko/Documents/elbrus_bootcamp/ds-phase-3/_FINAL_PROJECT/videos/testy/frames/wedding_stream.mp4~1705.jpg,wedding_stream.mp4,5115,"a woman in a dress standing next to a man
+27,/Users/aleko/Downloads/test_video_dir/1111/frames/20240815141945.mp4~42.jpg,20240815141945.mp4,126,"a bride and groom standing in front of a desk
 "
-9,/Users/aleko/Documents/elbrus_bootcamp/ds-phase-3/_FINAL_PROJECT/videos/testy/frames/wedding_stream.mp4~628.jpg,wedding_stream.mp4,1884,"two men are standing in front of a building
+19,/Users/aleko/Downloads/test_video_dir/1111/frames/20240815141233.mp4~25.jpg,20240815141233.mp4,75,"a group of people standing in a room with a man and woman
 "
-17,/Users/aleko/Documents/elbrus_bootcamp/ds-phase-3/_FINAL_PROJECT/videos/testy/frames/wedding_stream.mp4~916.jpg,wedding_stream.mp4,2748,"a wedding ceremony is being filmed on a computer
+17,/Users/aleko/Downloads/test_video_dir/1111/frames/20240721172957.mp4~27.jpg,20240721172957.mp4,81,"a group of people looking at a flower in a garden
 "
-16,/Users/aleko/Documents/elbrus_bootcamp/ds-phase-3/_FINAL_PROJECT/videos/testy/frames/wedding_stream.mp4~119.jpg,wedding_stream.mp4,357,"a wedding ceremony is taking place in a garden
+33,/Users/aleko/Downloads/test_video_dir/1111/frames/20240815222623.mp4~132.jpg,20240815222623.mp4,396,"a woman in a wedding dress is standing next to a man in a suit
 "
-4,/Users/aleko/Documents/elbrus_bootcamp/ds-phase-3/_FINAL_PROJECT/videos/testy/frames/wedding_stream.mp4~1228.jpg,wedding_stream.mp4,3684,"a woman in a wedding dress holding a microphone
+14,/Users/aleko/Downloads/test_video_dir/1111/frames/20240721173306.mp4~23.jpg,20240721173306.mp4,69,"a person is drawing a face on a piece of paper
 "
-12,/Users/aleko/Documents/elbrus_bootcamp/ds-phase-3/_FINAL_PROJECT/videos/testy/frames/wedding_stream.mp4~541.jpg,wedding_stream.mp4,1623,"two men in white shirts standing next to each other
+21,/Users/aleko/Downloads/test_video_dir/1111/frames/20240816162406.mp4~73.jpg,20240816162406.mp4,219,"a little girl is eating food at a table with other people
 "
-11,/Users/aleko/Documents/elbrus_bootcamp/ds-phase-3/_FINAL_PROJECT/videos/testy/frames/wedding_stream.mp4~502.jpg,wedding_stream.mp4,1506,"two men in tuxedos are having drinks at a wedding
+6,/Users/aleko/Downloads/test_video_dir/1111/frames/20240815141945.mp4~27.jpg,20240815141945.mp4,81,"a bride is getting ready for her wedding
 "
-8,/Users/aleko/Documents/elbrus_bootcamp/ds-phase-3/_FINAL_PROJECT/videos/testy/frames/wedding_stream.mp4~593.jpg,wedding_stream.mp4,1779,"a man in a white shirt is standing in front of a building
+31,/Users/aleko/Downloads/test_video_dir/1111/frames/20240815222623.mp4~42.jpg,20240815222623.mp4,126,"two young girls with orange hair are smiling
 "
-6,/Users/aleko/Documents/elbrus_bootcamp/ds-phase-3/_FINAL_PROJECT/videos/testy/frames/wedding_stream.mp4~473.jpg,wedding_stream.mp4,1419,"two men are taking a selfie in front of a building
+18,/Users/aleko/Downloads/test_video_dir/1111/frames/20240815141115.mp4~2.jpg,20240815141115.mp4,6,"a group of people standing in front of a door
 "
-14,/Users/aleko/Documents/elbrus_bootcamp/ds-phase-3/_FINAL_PROJECT/videos/testy/frames/wedding_stream.mp4~310.jpg,wedding_stream.mp4,930,"a man in a white shirt is standing next to a crowd
+20,/Users/aleko/Downloads/test_video_dir/1111/frames/20240816162406.mp4~63.jpg,20240816162406.mp4,189,"a woman wearing glasses
 "
-1,/Users/aleko/Documents/elbrus_bootcamp/ds-phase-3/_FINAL_PROJECT/videos/testy/frames/wedding_stream.mp4~1280.jpg,wedding_stream.mp4,3840,"two men in suits and sunglasses are speaking into microphones
+32,/Users/aleko/Downloads/test_video_dir/1111/frames/20240815222623.mp4~106.jpg,20240815222623.mp4,318,"a man in a suit is speaking into a microphone
 "
-2,/Users/aleko/Documents/elbrus_bootcamp/ds-phase-3/_FINAL_PROJECT/videos/testy/frames/wedding_stream.mp4~1539.jpg,wedding_stream.mp4,4617,"a person holding a cell phone with a camera on it
+3,/Users/aleko/Downloads/test_video_dir/1111/frames/20240815171409.mp4~1.jpg,20240815171409.mp4,3,"a group of people riding on a red and blue roller coaster
 "
-0,/Users/aleko/Documents/elbrus_bootcamp/ds-phase-3/_FINAL_PROJECT/videos/testy/frames/wedding_stream.mp4~90.jpg,wedding_stream.mp4,270,skin factory просмотр в кабинете в кабинете в кабинете в �
+22,/Users/aleko/Downloads/test_video_dir/1111/frames/20240816162406.mp4~37.jpg,20240816162406.mp4,111,"a group of people sitting around a table with food
+"
+15,/Users/aleko/Downloads/test_video_dir/1111/frames/20240721173628.mp4~7.jpg,20240721173628.mp4,21,"a man in a suit is holding a piece of paper
+"
+16,/Users/aleko/Downloads/test_video_dir/1111/frames/20240721174934.mp4~31.jpg,20240721174934.mp4,93,"two men in suits standing outside a building
+"
+10,/Users/aleko/Downloads/test_video_dir/1111/frames/20240815135239.mp4~6.jpg,20240815135239.mp4,18,"a group of people standing in a parking lot
+"
+37,/Users/aleko/Downloads/test_video_dir/1111/frames/20240815222623.mp4~53.jpg,20240815222623.mp4,159,"a man and two women standing in front of a bar
+"
+25,/Users/aleko/Downloads/test_video_dir/1111/frames/20240815222623.mp4~186.jpg,20240815222623.mp4,558,"an older woman holding a microphone while standing next to a man
+"
+23,/Users/aleko/Downloads/test_video_dir/1111/frames/20240815154215.mp4~7.jpg,20240815154215.mp4,21,"a bride and groom are getting married in a room
+"
+34,/Users/aleko/Downloads/test_video_dir/1111/frames/20240815222623.mp4~20.jpg,20240815222623.mp4,60,"a woman in a blue dress is standing next to a woman in a white dress
+"
+1,/Users/aleko/Downloads/test_video_dir/1111/frames/20240815172621.mp4~7.jpg,20240815172621.mp4,21,"a roller coaster ride at an amusement park
+"
+26,/Users/aleko/Downloads/test_video_dir/1111/frames/20240815222623.mp4~162.jpg,20240815222623.mp4,486,"a bride and groom are standing in front of a bar
+"
+2,/Users/aleko/Downloads/test_video_dir/1111/frames/20240816162406.mp4~13.jpg,20240816162406.mp4,39,"a group of people at a wedding party
+"
+8,/Users/aleko/Downloads/test_video_dir/1111/frames/20240721174934.mp4~6.jpg,20240721174934.mp4,18,"a man in a suit kneeling down and looking at cards
+"
+28,/Users/aleko/Downloads/test_video_dir/1111/frames/20240815154215.mp4~42.jpg,20240815154215.mp4,126,"wedding ceremony in the hall of the hotel
+"
+29,/Users/aleko/Downloads/test_video_dir/1111/frames/20240815154215.mp4~34.jpg,20240815154215.mp4,102,"a bride and groom pose for a photo in a wedding ceremony
+"
+11,/Users/aleko/Downloads/test_video_dir/1111/frames/20240721172957.mp4~2.jpg,20240721172957.mp4,6,"people standing outside of a building with a man on a bike
+"
+0,/Users/aleko/Downloads/test_video_dir/1111/frames/20240721173159.mp4~4.jpg,20240721173159.mp4,12,"a building with many windows and a clock on the side
+"

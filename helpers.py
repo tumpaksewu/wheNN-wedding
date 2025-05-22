@@ -1,4 +1,5 @@
 import os
+import gc
 import subprocess
 import requests
 import json
@@ -10,6 +11,11 @@ from PIL import Image
 from pathlib import Path
 from tqdm import tqdm
 from typing import Generator
+
+from faster_whisper import WhisperModel, BatchedInferencePipeline
+from langchain.schema import Document
+from langchain_community.vectorstores import FAISS
+from langchain_huggingface import HuggingFaceEmbeddings
 
 import torch
 from torchvision import transforms
@@ -29,6 +35,67 @@ from reportlab.lib import colors
 from reportlab.platypus import Table, TableStyle, Paragraph
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
+# Define text embeddings model, run later
+text_emb_model = None
+
+
+# Topic keywords for Whisper's pseudo-classes
+TOPIC_KEYWORDS = {
+    "toast": [
+        "тост",
+        "поздрав",
+        "молодожен",
+        "счастья",
+        "любви",
+        "семьи",
+        "благодар",
+    ],
+    "dance": [
+        "танец",
+        "танц",
+        "музык",
+        "ритм",
+        "движен",
+        "вечеринк",
+    ],
+    "rings": ["кольц", "помолвк", "обручальн"],
+    "ceremony": [
+        "церемони",
+        "бракосочестан",
+        "роспис",
+        "законн",
+        "клятв",
+        "обет",
+        "регистрац",
+    ],
+    "host": ["ведущ", "объявляю", "микрофон", "программ", "приглаш", "гост", "начал"],
+    "photo": ["фото", "сним", "камер", "видео", "памят", "групп", "позир"],
+    "meal": ["ужин", "банкет", "ресторан", "меню", "блюд", "напитк", "алкогол", "тост"],
+    "cake_cutting": [
+        "торт",
+        "десерт",
+    ],
+    "bouquet_toss": [
+        "букет",
+    ],
+    "vows": ["клятв", "обещания", "слова любви", "признание"],
+    "gift_opening": [
+        "подарки",
+        "подароч",
+        "распаковка",
+        "свадебные подарки",
+        "презент",
+    ],
+    "applause": [
+        "аплодисменты",
+        "хлопайте",
+        "поаплодируем",
+        "встречаем",
+        "приветствуем",
+    ],
+}
+
+
 # CLIP FUNCTIONS ———————————————————————
 # TODO - evaluate and revert if needed
 preprocess = transforms.Compose(
@@ -42,15 +109,6 @@ preprocess = transforms.Compose(
         ),
     ]
 )
-# preprocess = transforms.Compose(
-#     [
-#         transforms.Resize(
-#             (224, 224), interpolation=transforms.InterpolationMode.BICUBIC
-#         ),
-#         transforms.ToTensor(),
-#         transforms.Normalize((0.4815, 0.4578, 0.4082), (0.2686, 0.2613, 0.2758)),
-#     ]
-# )
 
 
 # Function to load and preprocess image
@@ -179,21 +237,38 @@ def retrieve_top_k(query, hnsw_index, metadata, device, clip_model, processor, k
 def extract_frames(
     video_path: str, output_dir: str, fps: float = 1 / 3
 ) -> Generator[str, None, None]:
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+    frames_dir = Path(output_dir / "frames").resolve()
+
+    if not os.path.exists(frames_dir):
+        os.makedirs(frames_dir)
 
     video_name = os.path.basename(video_path)
-    output_template = os.path.join(output_dir, f"{video_name}~%d.jpg")
+    frame_template = os.path.join(frames_dir, f"{video_name}~%d.jpg")
+    audio_template = os.path.join(output_dir, f"{video_name}.wav")
 
     command = [
         "ffmpeg",
-        "-i",
-        video_path,
         "-ss",
         "3",
+        "-i",
+        video_path,
+        "-map",
+        "0:v",
         "-vf",
         f"scale=480:-2,fps={fps}",
-        output_template,
+        frame_template,
+        "-map",
+        "0:a",
+        "-af",
+        "loudnorm=I=-16:TP=-1.5:LRA=11",
+        "-ar",
+        "16000",
+        "-ac",
+        "1",
+        "-c:a",
+        "pcm_s16le",
+        audio_template,
+        "-y",
     ]
 
     process = subprocess.Popen(
@@ -346,7 +421,133 @@ def read_captions_csv(csv_input_path):
     return centroid_captions
 
 
-# LLM FUNCTIONS ———————————————————————
+# WHISPER FUNCTIONS ———————————————————————
+def run_whisper(
+    audio_path, model="base", batch_size=12, out_path="whisper_transcription.json"
+):
+    basename = os.path.basename(audio_path)
+    if not basename.endswith(".wav"):
+        raise ValueError(f"Audio path must end with '.wav': {audio_path}")
+    video_filename = basename[:-4]
+
+    # TODO - allow to pass cuda
+    whisper = WhisperModel(model, device="cpu", compute_type="int8")
+    batched_model = BatchedInferencePipeline(model=whisper)
+
+    # Transcribe
+    segments_gen, _ = batched_model.transcribe(audio_path, batch_size=batch_size)
+
+    # Convert generator to list of dicts
+    segments = []
+    for seg in segments_gen:
+        segments.append(
+            {
+                "start": seg.start,
+                "end": seg.end,
+                "text": seg.text,
+                "video_filename": video_filename,
+            }
+        )
+
+    # Cleanup memory
+    del model, batched_model
+    gc.collect()
+
+    return segments
+
+
+def load_segments(path):
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    segments = []
+    for seg in data:
+        segments.append(
+            {
+                "start": seg["start"],
+                "end": seg["end"],
+                "text": seg["text"],
+                "video_filename": seg.get("video_filename", ""),
+            }
+        )
+    return segments
+
+
+def add_topics(segment) -> list[str]:
+    text = segment["text"].lower()
+    matched_topics = []
+    for topic, keywords in TOPIC_KEYWORDS.items():
+        if any(kw in text for kw in keywords):
+            matched_topics.append(topic)
+    return matched_topics
+
+
+def build_documents(segments):
+    docs = []
+    for seg in segments:
+        topics = add_topics(seg)
+        doc = Document(
+            page_content=seg["text"],
+            metadata={
+                "start": seg["start"],
+                "end": seg["end"],
+                "topics": topics,
+                "video_filename": seg["video_filename"],
+            },
+        )
+        docs.append(doc)
+    return docs
+
+
+def embed_and_save_index(docs, db_dir):
+    global text_emb_model
+    text_emb_model = "intfloat/multilingual-e5-small"
+    index_path = os.path.abspath(os.path.join(db_dir, "whisper_index"))
+    embeddings = HuggingFaceEmbeddings(model_name=text_emb_model)
+    vectorstore = FAISS.from_documents(docs, embeddings)
+    vectorstore.save_local(index_path)
+    return vectorstore
+
+
+def load_index(db_dir):
+    index_path = os.path.abspath(os.path.join(db_dir, "whisper_index"))
+    model_name = "intfloat/multilingual-e5-small"
+    embeddings = HuggingFaceEmbeddings(model_name=model_name)
+    return FAISS.load_local(
+        index_path, embeddings, allow_dangerous_deserialization=True
+    )
+
+
+def semantic_search(query, vs, k=5):
+    results = vs.similarity_search(query, k=k)
+    return [
+        {
+            "text": doc.page_content,
+            "start": doc.metadata["start"],
+            "end": doc.metadata["end"],
+            "topics": doc.metadata.get("topics", []),
+            "video_filename": doc.metadata["video_filename"],
+        }
+        for doc in results
+    ]
+
+
+def search_by_topic(topic_keyword: str, vs):
+    results = []
+    for doc in vs.docstore._dict.values():
+        if topic_keyword.lower() in [t.lower() for t in doc.metadata.get("topics", [])]:
+            results.append(
+                {
+                    "text": doc.page_content,
+                    "start": doc.metadata["start"],
+                    "end": doc.metadata["end"],
+                    "topics": doc.metadata["topics"],
+                    "video_filename": doc.metadata["video_filename"],
+                }
+            )
+    return results
+
+
+# PDF + LLM FUNCTIONS ———————————————————————
 def request_scenarios(
     centroid_captions, api_key, model, prompt=None, response_log_dir=None
 ):
@@ -612,7 +813,7 @@ def prepare_pdf(content_data, files_dir, output_pdf="wedding_scenario_reportlab.
 
     # === Первая страница ===
     # Добавляем логотип
-    logo_file = f"{files_dir}/logo.jpg"
+    logo_file = f"{files_dir}/logo.png"
     logo_height = draw_logo(c, width, margin, y, logo_file)
     y -= logo_height + 0.5 * cm  # Отступ после логотипа
 

@@ -31,5 +31,7 @@ app.log
 tests.ipynb
 .nicegui
 scenario_report.pdf
+main-bk.py
+helpers-bk.py
 
 *.spec
